@@ -1,0 +1,1 @@
+@SET PATH=%CD%\MinGW32\bin;%PATH%

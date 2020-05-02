@@ -1,0 +1,33 @@
+  GNU GDB port to MingW32
+  Version: gdb-6.3-1
+  
+Chris Johns (cjohns@users.sourceforge.net)
+
+1) Please check the doc/gdb/PORTPATCH for the patch details. This patch
+   is a mix of the 5.2.1 and new additions by me. Contact me for details
+   of what I have added or any updates.
+2) The readline support in 6.3 is readline version 4.3. The 4.2 patch has
+   been updated to 4.3. The low level keyboard code has been rewritten to
+   support control and meta characters. The 4.2 patch assumes a specific
+   memory layout and this made the patch fragil.
+3) I have add a tcp target. No gdbserver exists for MinGW yet. The remote
+   tcp target is for cross compiled targets that can support the remote
+   target. The patch includes changes to GDB to better support non-POSIX
+   hosts by a cleaner layering of the remote/async code.
+4) A bug exists in this patch for cross compiler TCP support. The 
+   configure script does not supply the -lwsock2 library. This will be
+   fixed in the next release.
+5) This patch will not support Insight. It will apply, build but will
+   not run. I am working on this as a background task. The issue is
+   GDB's uses of setjmp/longjmp and TCL on Windows using threads. This
+   does not mix. On top of this SEH makes the the GDB event loop look
+   fragile. The resulting patches to GDB do not seem worth the effort and
+   if I maintained GDB would not accept them.
+6) The patch includes a fix to the MingW32/Cygwin common win32-nat.c code.
+   I testing a bug report against this release I noticed hitting 'r'un again
+   resulted in low level errors. I tracked the errors to the thread handle
+   being reused and the restart code closing attached threads from the last
+   process and so closing the new handle. Also the DLL support was tring to
+   clean up after the process has gone.
+*) Report bugs to mingw-users@lists.sf.net first for this port release.
+*) These changes have yet to be submitted for review.

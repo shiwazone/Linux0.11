@@ -1,0 +1,3942 @@
+diff -Nru3 --exclude configure gdb-6.3/bfd/opncls.c gdb-6.3-1/bfd/opncls.c
+--- gdb-6.3/bfd/opncls.c	Sun Oct 10 23:58:05 2004
++++ gdb-6.3-1/bfd/opncls.c	Wed Feb 16 20:17:47 2005
+@@ -218,7 +218,26 @@
+ 
+   bfd_set_error (bfd_error_system_call);
+ #if ! defined(HAVE_FCNTL) || ! defined(F_GETFL)
++#if defined (__MINGW32__)
++  /*
++   * If we wrongly guess the access type on mingw, later in bfd_open_file
++   * fopen will fail tring to open currently executing file in +r mode.
++   *
++   * Added to this, if we do not do this closing a bfd tries to write the
++   * symbols to disk. If a gdb session has a file on the command line and
++   * then a 'file xxxx' is entered by the user and command line file is
++   * closed and a write is attempted.
++   *
++   * I can't find a better way to determine which way fd was opened.
++   */
++ 
++  if (_commit (fd) < 0)
++    fdflags = O_RDONLY;
++  else
++    fdflags = O_RDWR;
++#else
+   fdflags = O_RDWR;			/* Assume full access.  */
++#endif
+ #else
+   fdflags = fcntl (fd, F_GETFL, NULL);
+ #endif
+diff -Nru3 --exclude configure gdb-6.3/configure.in gdb-6.3-1/configure.in
+--- gdb-6.3/configure.in	Tue Nov  9 03:26:28 2004
++++ gdb-6.3-1/configure.in	Wed Feb 16 20:17:47 2005
+@@ -582,7 +582,7 @@
+     # Can't build gdb for mingw32 if not native.
+     case "${host}" in
+       i[[3456789]]86-*-mingw32) ;; # keep gdb tcl tk expect etc.
+-      *) noconfigdirs="$noconfigdirs gdb tcl tk expect itcl gnuserv"
++      *) noconfigdirs="$noconfigdirs tcl tk expect itcl gnuserv"
+          ;;
+     esac
+     ;;    
+diff -Nru3 --exclude configure gdb-6.3/gdb/Makefile.in gdb-6.3-1/gdb/Makefile.in
+--- gdb-6.3/gdb/Makefile.in	Thu Nov  4 13:18:49 2004
++++ gdb-6.3-1/gdb/Makefile.in	Wed Feb 16 20:17:47 2005
+@@ -544,7 +544,7 @@
+ 	regcache.c reggroups.c remote.c remote-fileio.c \
+ 	scm-exp.c scm-lang.c scm-valprint.c \
+ 	sentinel-frame.c \
+-	serial.c ser-unix.c source.c \
++	serial.c ser-mingw.c ser-unix.c source.c \
+ 	stabsread.c stack.c std-regs.c symfile.c symfile-mem.c symmisc.c \
+ 	symtab.c \
+ 	target.c thread.c top.c tracepoint.c \
+@@ -756,6 +756,7 @@
+ scm_tags_h = scm-tags.h
+ sentinel_frame_h = sentinel-frame.h
+ serial_h = serial.h
++ser_mingw_h = ser-mingw.h
+ ser_unix_h = ser-unix.h
+ shnbsd_tdep_h = shnbsd-tdep.h
+ sh_tdep_h = sh-tdep.h
+@@ -1377,6 +1378,7 @@
+ 	i386v4-nat.c i386ly-tdep.c i386-cygwin-tdep.c \
+ 	i386bsd-nat.c i386bsd-tdep.c i386fbsd-nat.c i386fbsd-tdep.c \
+ 	i386nbsd-nat.c i386nbsd-tdep.c i386obsd-nat.c i386obsd-tdep.c \
++	i386-win32-nat.c \
+ 	i387-tdep.c \
+ 	i386-linux-tdep.c i386-nat.c \
+ 	i386gnu-nat.c i386gnu-tdep.c \
+@@ -2047,6 +2049,8 @@
+ i386v-nat.o: i386v-nat.c $(defs_h) $(frame_h) $(inferior_h) $(language_h) \
+ 	$(gdbcore_h) $(gdb_stat_h) $(floatformat_h) $(target_h) \
+ 	$(i386_tdep_h)
++i386-win32-tdep.o: i386-win32-tdep.c $(defs_h) $(osabi_h) $(gdb_string_h) \
++	$(i386_tdep_h)
+ i387-tdep.o: i387-tdep.c $(defs_h) $(doublest_h) $(floatformat_h) $(frame_h) \
+ 	$(gdbcore_h) $(inferior_h) $(language_h) $(regcache_h) $(value_h) \
+ 	$(gdb_assert_h) $(gdb_string_h) $(i386_tdep_h) $(i387_tdep_h)
+@@ -2458,6 +2462,8 @@
+ ser-e7kpc.o: ser-e7kpc.c $(defs_h) $(serial_h) $(gdb_string_h)
+ ser-go32.o: ser-go32.c $(defs_h) $(gdbcmd_h) $(serial_h) $(gdb_string_h)
+ serial.o: serial.c $(defs_h) $(serial_h) $(gdb_string_h) $(gdbcmd_h)
++ser-mingw.o: ser-mingw.c $(defs_h) $(serial_h) $(ser_mingw_h) $(terminal_h) \
++	$(gdb_string_h) $(event_loop_h)
+ ser-pipe.o: ser-pipe.c $(defs_h) $(serial_h) $(ser_unix_h) $(gdb_vfork_h) \
+ 	$(gdb_string_h)
+ ser-tcp.o: ser-tcp.c $(defs_h) $(serial_h) $(ser_unix_h) $(gdb_string_h)
+diff -Nru3 --exclude configure gdb-6.3/gdb/config/i386/mingw32.mh gdb-6.3-1/gdb/config/i386/mingw32.mh
+--- gdb-6.3/gdb/config/i386/mingw32.mh	Thu Jan  1 10:00:00 1970
++++ gdb-6.3-1/gdb/config/i386/mingw32.mh	Wed Feb 16 20:17:47 2005
+@@ -0,0 +1,5 @@
++MH_CFLAGS=-D_POSIX_
++XM_FILE=xm-mingw32.h
++NATDEPFILES= i386-nat.o win32-nat.o corelow.o
++NAT_FILE=nm-mingw32.h
++XM_CLIBS=
+diff -Nru3 --exclude configure gdb-6.3/gdb/config/i386/mingw32.mt gdb-6.3-1/gdb/config/i386/mingw32.mt
+--- gdb-6.3/gdb/config/i386/mingw32.mt	Thu Jan  1 10:00:00 1970
++++ gdb-6.3-1/gdb/config/i386/mingw32.mt	Wed Feb 16 20:17:47 2005
+@@ -0,0 +1,4 @@
++# Target: Intel x86 running Win32 (MinGW)
++TDEPFILES= i386-tdep.o i386-win32-tdep.o i387-tdep.o
++DEPRECATED_TM_FILE= tm-mingw32.h
++GDBSERVER_DEPFILES=
+diff -Nru3 --exclude configure gdb-6.3/gdb/config/i386/nm-mingw32.h gdb-6.3-1/gdb/config/i386/nm-mingw32.h
+--- gdb-6.3/gdb/config/i386/nm-mingw32.h	Thu Jan  1 10:00:00 1970
++++ gdb-6.3-1/gdb/config/i386/nm-mingw32.h	Wed Feb 16 20:17:47 2005
+@@ -0,0 +1,38 @@
++/* Native definitions for Intel x86 running MinGW.
++   Copyright (C) 2002 Free Software Foundation, Inc.
++
++   This file is part of GDB.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 2 of the License, or
++   (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 59 Temple Place - Suite 330,
++   Boston, MA 02111-1307, USA.  */
++
++#define NO_PTRACE_H
++
++#define I386_USE_GENERIC_WATCHPOINTS
++
++#include "i386/nm-i386.h"
++
++/* Support for hardware-assisted breakpoints and watchpoints.  */
++
++#define I386_DR_LOW_SET_CONTROL(VAL)	cygwin_set_dr7 (VAL)
++extern void cygwin_set_dr7 (unsigned);
++
++#define I386_DR_LOW_SET_ADDR(N,ADDR)	cygwin_set_dr (N,ADDR)
++extern void cygwin_set_dr (int, CORE_ADDR);
++
++#define I386_DR_LOW_RESET_ADDR(N)
++
++#define I386_DR_LOW_GET_STATUS()	cygwin_get_dr6 ()
++extern unsigned cygwin_get_dr6 (void);
+diff -Nru3 --exclude configure gdb-6.3/gdb/config/i386/tm-mingw32.h gdb-6.3-1/gdb/config/i386/tm-mingw32.h
+--- gdb-6.3/gdb/config/i386/tm-mingw32.h	Thu Jan  1 10:00:00 1970
++++ gdb-6.3-1/gdb/config/i386/tm-mingw32.h	Wed Feb 16 20:17:47 2005
+@@ -0,0 +1,21 @@
++/* Macro definitions for i386 running under Win32.
++   Copyright 1999 Free Software Foundation, Inc.
++
++   This file is part of GDB.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 2 of the License, or
++   (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.  */
++
++#include "i386/tm-cygwin.h"
++
+diff -Nru3 --exclude configure gdb-6.3/gdb/config/i386/xm-mingw32.h gdb-6.3-1/gdb/config/i386/xm-mingw32.h
+--- gdb-6.3/gdb/config/i386/xm-mingw32.h	Thu Jan  1 10:00:00 1970
++++ gdb-6.3-1/gdb/config/i386/xm-mingw32.h	Wed Feb 16 20:17:47 2005
+@@ -0,0 +1,25 @@
++/* Definitions for hosting on WIN32, building with MinGW, for GDB.
++   Copyright 1999 Free Software Foundation, Inc.
++
++This file is part of GDB.
++
++This program is free software; you can redistribute it and/or modify
++it under the terms of the GNU General Public License as published by
++the Free Software Foundation; either version 2 of the License, or
++(at your option) any later version.
++
++This program is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++GNU General Public License for more details.
++
++You should have received a copy of the GNU General Public License
++along with this program; if not, write to the Free Software
++Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.  */
++
++#include "fopen-bin.h"
++#define getkey getch
++#define DIRNAME_SEPARATOR ';'
++
++/* Define this if source files use \r\n rather than just \n.  */
++#define CRLF_SOURCE_FILES
+diff -Nru3 --exclude configure gdb-6.3/gdb/config.in gdb-6.3-1/gdb/config.in
+--- gdb-6.3/gdb/config.in	Sat Sep 25 19:17:46 2004
++++ gdb-6.3-1/gdb/config.in	Wed Feb 16 20:17:47 2005
+@@ -82,6 +82,9 @@
+ /* Define if your struct stat has st_blocks.  */
+ #undef HAVE_STRUCT_STAT_ST_BLOCKS
+ 
++/* Define if your struct stat has st_blksize.  */
++#undef HAVE_STRUCT_STAT_ST_BLKSIZE
++
+ /* Define if your struct reg has r_gs.  */
+ #undef HAVE_STRUCT_REG_R_GS
+ 
+diff -Nru3 --exclude configure gdb-6.3/gdb/configure.host gdb-6.3-1/gdb/configure.host
+--- gdb-6.3/gdb/configure.host	Thu Sep  2 06:46:41 2004
++++ gdb-6.3-1/gdb/configure.host	Wed Feb 16 20:17:47 2005
+@@ -66,6 +66,7 @@
+ 			gdb_host=nbsdelf ;;
+ i[34567]86-*-netbsd*)	gdb_host=nbsdaout ;;
+ i[34567]86-*-go32*)	gdb_host=go32 ;;
++i[34567]86-*-mingw32*)	gdb_host=mingw32 ;;
+ i[34567]86-*-msdosdjgpp*) gdb_host=go32 ;;
+ i[34567]86-*-linux*)	gdb_host=linux ;;
+ i[34567]86-*-lynxos*)	gdb_host=i386lynx ;;
+diff -Nru3 --exclude configure gdb-6.3/gdb/configure.in gdb-6.3-1/gdb/configure.in
+--- gdb-6.3/gdb/configure.in	Mon Oct 11 01:55:49 2004
++++ gdb-6.3-1/gdb/configure.in	Wed Feb 16 20:17:48 2005
+@@ -338,7 +338,7 @@
+       LIBS="../libtermcap/libtermcap.a $LIBS"
+       ac_cv_search_tgetent="../libtermcap/libtermcap.a"
+     fi ;;
+-  go32* | *djgpp*)
++  go32* | *djgpp* | mingw*)
+     ac_cv_search_tgetent="none required"
+     ;;
+ esac
+@@ -1196,21 +1196,30 @@
+ lose
+ #endif],[gdb_cv_os_cygwin=yes],[gdb_cv_os_cygwin=no])])
+ 
++# Ditto for MinGW
++AC_CACHE_CHECK([for mingw], gdb_cv_os_mingw,
++[AC_EGREP_CPP(lose, [
++#if defined (__MINGW__) || defined (__MINGW32__)
++lose
++#endif],[gdb_cv_os_mingw=yes],[gdb_cv_os_mingw=no])])
+ 
+ dnl Figure out which of the many generic ser-*.c files the _host_ supports.
+ SER_HARDWIRE="ser-unix.o ser-pipe.o ser-tcp.o"
+ case ${host} in
+   *go32* ) SER_HARDWIRE=ser-go32.o ;;
+   *djgpp* ) SER_HARDWIRE=ser-go32.o ;;
++  *mingw* ) SER_HARDWIRE="ser-mingw.o ser-tcp.o" ;;
+ esac
+ AC_SUBST(SER_HARDWIRE)
+ 
+ # libreadline needs libuser32.a in a cygwin environment
+ WIN32LIBS=
+-if test x$gdb_cv_os_cygwin = xyes; then
++if test x$gdb_cv_os_cygwin = xyes || test x$gdb_cv_os_mingw = xyes; then
+     WIN32LIBS="-luser32"
+     case "${target}" in
+ 	*cygwin*) WIN32LIBS="$WIN32LIBS -limagehlp"
++	;;
++	*mingw*) WIN32LIBS="$WIN32LIBS -lwsock32 -lpsapi"
+ 	;;
+     esac
+ fi
+diff -Nru3 --exclude configure gdb-6.3/gdb/configure.tgt gdb-6.3-1/gdb/configure.tgt
+--- gdb-6.3/gdb/configure.tgt	Fri Oct  1 17:29:34 2004
++++ gdb-6.3-1/gdb/configure.tgt	Wed Feb 16 20:17:48 2005
+@@ -97,6 +97,7 @@
+ i[34567]86-*-netware*)	gdb_target=i386
+ 			configdirs="${configdirs} nlm" ;;
+ i[34567]86-*-cygwin*)	gdb_target=cygwin  ;;
++i[34567]86-*-mingw32*)	gdb_target=mingw32  ;;
+ i[34567]86-*-vxworks*)	gdb_target=vxworks ;;
+ i[34567]86-*-*)		gdb_target=i386 ;;
+ 
+diff -Nru3 --exclude configure gdb-6.3/gdb/defs.h gdb-6.3-1/gdb/defs.h
+--- gdb-6.3/gdb/defs.h	Tue Oct 12 20:06:14 2004
++++ gdb-6.3-1/gdb/defs.h	Wed Feb 16 20:17:48 2005
+@@ -1051,6 +1051,7 @@
+   GDB_OSABI_QNXNTO,
+ 
+   GDB_OSABI_CYGWIN,
++  GDB_OSABI_WIN32,
+ 
+   GDB_OSABI_INVALID		/* keep this last */
+ };
+@@ -1238,7 +1239,7 @@
+ #define SLASH_STRING "/"
+ #endif
+ 
+-#ifdef __MSDOS__
++#if defined(__MSDOS__) || defined(__MINGW32__)
+ # define CANT_FORK
+ # define GLOBAL_CURDIR
+ #endif
+diff -Nru3 --exclude configure gdb-6.3/gdb/environ.c gdb-6.3-1/gdb/environ.c
+--- gdb-6.3/gdb/environ.c	Mon Nov 24 07:41:16 2003
++++ gdb-6.3-1/gdb/environ.c	Wed Feb 16 20:17:48 2005
+@@ -28,12 +28,12 @@
+ 
+ /* Return a new environment object.  */
+ 
+-struct environ *
++struct gdb_environ *
+ make_environ (void)
+ {
+-  struct environ *e;
++  struct gdb_environ *e;
+ 
+-  e = (struct environ *) xmalloc (sizeof (struct environ));
++  e = (struct gdb_environ *) xmalloc (sizeof (struct gdb_environ));
+ 
+   e->allocated = 10;
+   e->vector = (char **) xmalloc ((e->allocated + 1) * sizeof (char *));
+@@ -44,7 +44,7 @@
+ /* Free an environment and all the strings in it.  */
+ 
+ void
+-free_environ (struct environ *e)
++free_environ (struct gdb_environ *e)
+ {
+   char **vector = e->vector;
+ 
+@@ -59,7 +59,7 @@
+    that all strings in these environments are safe to free.  */
+ 
+ void
+-init_environ (struct environ *e)
++init_environ (struct gdb_environ *e)
+ {
+   extern char **environ;
+   int i;
+@@ -91,7 +91,7 @@
+    This is used to get something to pass to execve.  */
+ 
+ char **
+-environ_vector (struct environ *e)
++environ_vector (struct gdb_environ *e)
+ {
+   return e->vector;
+ }
+@@ -99,7 +99,7 @@
+ /* Return the value in environment E of variable VAR.  */
+ 
+ char *
+-get_in_environ (const struct environ *e, const char *var)
++get_in_environ (const struct gdb_environ *e, const char *var)
+ {
+   int len = strlen (var);
+   char **vector = e->vector;
+@@ -115,7 +115,7 @@
+ /* Store the value in E of VAR as VALUE.  */
+ 
+ void
+-set_in_environ (struct environ *e, const char *var, const char *value)
++set_in_environ (struct gdb_environ *e, const char *var, const char *value)
+ {
+   int i;
+   int len = strlen (var);
+@@ -162,7 +162,7 @@
+ /* Remove the setting for variable VAR from environment E.  */
+ 
+ void
+-unset_in_environ (struct environ *e, char *var)
++unset_in_environ (struct gdb_environ *e, char *var)
+ {
+   int len = strlen (var);
+   char **vector = e->vector;
+diff -Nru3 --exclude configure gdb-6.3/gdb/environ.h gdb-6.3-1/gdb/environ.h
+--- gdb-6.3/gdb/environ.h	Tue Mar  6 19:21:07 2001
++++ gdb-6.3-1/gdb/environ.h	Wed Feb 16 20:17:48 2005
+@@ -21,7 +21,7 @@
+ 
+ /* We manipulate environments represented as these structures.  */
+ 
+-struct environ
++struct gdb_environ
+   {
+     /* Number of usable slots allocated in VECTOR.
+        VECTOR always has one slot not counted here,
+@@ -34,18 +34,18 @@
+     char **vector;
+   };
+ 
+-extern struct environ *make_environ (void);
++extern struct gdb_environ *make_environ (void);
+ 
+-extern void free_environ (struct environ *);
++extern void free_environ (struct gdb_environ *);
+ 
+-extern void init_environ (struct environ *);
++extern void init_environ (struct gdb_environ *);
+ 
+-extern char *get_in_environ (const struct environ *, const char *);
++extern char *get_in_environ (const struct gdb_environ *, const char *);
+ 
+-extern void set_in_environ (struct environ *, const char *, const char *);
++extern void set_in_environ (struct gdb_environ *, const char *, const char *);
+ 
+-extern void unset_in_environ (struct environ *, char *);
++extern void unset_in_environ (struct gdb_environ *, char *);
+ 
+-extern char **environ_vector (struct environ *);
++extern char **environ_vector (struct gdb_environ *);
+ 
+ #endif /* defined (ENVIRON_H) */
+diff -Nru3 --exclude configure gdb-6.3/gdb/event-loop.c gdb-6.3-1/gdb/event-loop.c
+--- gdb-6.3/gdb/event-loop.c	Wed Nov  6 08:17:33 2002
++++ gdb-6.3-1/gdb/event-loop.c	Wed Feb 16 20:17:48 2005
+@@ -31,6 +31,12 @@
+ #endif
+ #endif
+ 
++#ifdef __MINGW32__
++#include <io.h>
++#include <sys/time.h>
++#include <windows.h>
++#endif
++
+ #include <sys/types.h>
+ #include "gdb_string.h"
+ #include <errno.h>
+@@ -145,12 +151,23 @@
+     int poll_timeout;
+ #endif
+ 
++#if defined (__MINGW32__)
++    /* Handles for WaitForMultipleObjects.
++
++       Space is allocated for num_fds handles, but currently only console
++       input handles are waited upon, all other handle kinds are
++       considered always ready. */
++
++    HANDLE *waitable_handles;
++    file_handler **waitable_files;
++#else /* !__MINGW32__ */
+     /* Masks to be used in the next call to select.
+        Bits are set in response to calls to create_file_handler. */
+     fd_set check_masks[3];
+ 
+     /* What file descriptors were found ready by select. */
+     fd_set ready_masks[3];
++#endif /* !__MINGW32__ */
+ 
+     /* Number of file descriptors to monitor. (for poll) */
+     /* Number of valid bits (highest fd value + 1). (for select) */
+@@ -464,7 +481,13 @@
+ #endif
+     }
+   else
++#if defined (__MINGW32__)
++    /* For now, there is no way to specify a mask for users of
++       create_file_handler under MinGW. */
++    create_file_handler (fd, 0, proc, client_data);
++#else /* !__MINGW32__ */
+     create_file_handler (fd, GDB_READABLE | GDB_EXCEPTION, proc, client_data);
++#endif /* !__MINGW32__ */
+ }
+ 
+ /* Add a file handler/descriptor to the list of descriptors we are
+@@ -523,6 +546,39 @@
+ 	}
+       else
+ 	{
++#if defined (__MINGW32__)
++      /* Count number of file_handlers, realloc space if needed */
++
++      int count_fds = 0;
++      file_handler *fd_file_ptr;
++
++      for (fd_file_ptr = gdb_notifier.first_file_handler; fd_file_ptr != NULL;
++           fd_file_ptr = fd_file_ptr->next_file)
++        count_fds++;
++      
++      if( gdb_notifier.num_fds != count_fds)
++      {
++        if( gdb_notifier.num_fds == 0)
++	{
++	  gdb_notifier.waitable_handles = 
++	    (HANDLE *)xmalloc( sizeof( HANDLE));
++	  gdb_notifier.waitable_files = 
++	    (file_handler **)xmalloc( sizeof( file_handler *));
++	}
++	else
++	{
++	  gdb_notifier.waitable_handles = 
++	    (HANDLE *)xrealloc( 
++	      gdb_notifier.waitable_handles, count_fds * sizeof( HANDLE)
++	    );
++	  gdb_notifier.waitable_files = 
++	    (file_handler **)xrealloc( 
++	      gdb_notifier.waitable_files, count_fds * sizeof( file_handler *)
++	    );
++	}
++	gdb_notifier.num_fds = count_fds;
++      }
++#else /* !__MINGW32__ */
+ 	  if (mask & GDB_READABLE)
+ 	    FD_SET (fd, &gdb_notifier.check_masks[0]);
+ 	  else
+@@ -540,6 +596,7 @@
+ 
+ 	  if (gdb_notifier.num_fds <= fd)
+ 	    gdb_notifier.num_fds = fd + 1;
++#endif /* !__MINGW32__ */
+ 	}
+     }
+ 
+@@ -601,6 +658,23 @@
+     }
+   else
+     {
++#if defined (__MINGW32__)
++      /* Just realloc space. */
++      --gdb_notifier.num_fds;
++
++      xfree (gdb_notifier.waitable_handles);
++      xfree (gdb_notifier.waitable_files);
++
++      if (gdb_notifier.num_fds > 0)
++      {
++	gdb_notifier.waitable_handles = 
++	  (HANDLE *)xmalloc( gdb_notifier.num_fds * sizeof( HANDLE));
++	gdb_notifier.waitable_files = 
++	  (file_handler **)xmalloc( 
++	    gdb_notifier.num_fds * sizeof( file_handler *)
++	  );
++      }
++#else /* !__MINGW32__ */
+       if (file_ptr->mask & GDB_READABLE)
+ 	FD_CLR (fd, &gdb_notifier.check_masks[0]);
+       if (file_ptr->mask & GDB_WRITABLE)
+@@ -622,6 +696,7 @@
+ 	    }
+ 	  gdb_notifier.num_fds = i;
+ 	}
++#endif /* !__MINGW32__ */
+     }
+ 
+   /* Deactivate the file descriptor, by clearing its mask, 
+@@ -703,6 +778,10 @@
+ 	    }
+ 	  else
+ 	    {
++#if defined (__MINGW32__)
++              /* Masks match when it's ready - simple! */
++	      mask = file_ptr->ready_mask;
++#else /* !__MINGW32__ */
+ 	      if (file_ptr->ready_mask & GDB_EXCEPTION)
+ 		{
+ 		  printf_unfiltered ("Exception condition detected on fd %d\n", file_ptr->fd);
+@@ -711,6 +790,7 @@
+ 	      else
+ 		file_ptr->error = 0;
+ 	      mask = file_ptr->ready_mask & file_ptr->mask;
++#endif /* !__MINGW32__ */
+ 	    }
+ 
+ 	  /* Clear the received events for next time around. */
+@@ -765,6 +845,59 @@
+     }
+   else
+     {
++#if defined (__MINGW32__)
++       /* Since our users may close/dup fds without telling us, 
++          the safest (and simplest) thing is to do fd->HANDLE conversion 
++          every time just before calling WaitForMultipleObjects */
++          
++       /* NOTE: file_handler->mask is really abused here */
++       
++       int waitable_count = 0;
++       HANDLE h;
++       
++       for (file_ptr = gdb_notifier.first_file_handler;
++            file_ptr != NULL;
++            file_ptr = file_ptr->next_file)
++         {
++           file_ptr->mask = 1;
++ 	  file_ptr->error = 0;
++           h = (HANDLE)_get_osfhandle (file_ptr->fd);
++           if (GetFileType (h) == FILE_TYPE_CHAR) /* console */
++             {
++             gdb_notifier.waitable_handles[waitable_count] = h;
++             gdb_notifier.waitable_files[waitable_count] = file_ptr;
++             ++waitable_count;
++             }
++           else /* consider it ready */
++             file_ptr->mask = 1;
++         }
++       if (waitable_count > 0)
++         {
++         DWORD r = WaitForMultipleObjects (waitable_count, 
++                     gdb_notifier.waitable_handles,
++                     0,
++                     gdb_notifier.timeout_valid 
++                      ?       gdb_notifier.select_timeout.tv_sec * 1000
++                            + gdb_notifier.select_timeout.tv_usec / 1000
++                      :  INFINITE);
++                      
++         if (r == WAIT_FAILED)
++ 	  {
++ 	    int i;
++ 	    
++             printf_unfiltered( "gdb_wait_for_event: WaitForMultipleObjects failed: %x\n",
++                                   (unsigned)GetLastError() );
++ 	    for (i=0; i<waitable_count; ++i )
++ 	      gdb_notifier.waitable_files[i]->error = 1;
++ 	  }
++                                 
++         /* WaitForMultipleObjects returns only the first ready object.
++            I don't know how to get to the others */
++         if (r >= WAIT_OBJECT_0 && r < WAIT_OBJECT_0 + waitable_count)
++           gdb_notifier.waitable_files[r-WAIT_OBJECT_0]->mask = 1;
++          
++      }
++#else /* !__MINGW32__ */
+       gdb_notifier.ready_masks[0] = gdb_notifier.check_masks[0];
+       gdb_notifier.ready_masks[1] = gdb_notifier.check_masks[1];
+       gdb_notifier.ready_masks[2] = gdb_notifier.check_masks[2];
+@@ -785,6 +918,7 @@
+ 	  if (errno != EINTR)
+ 	    perror_with_name ("Select");
+ 	}
++#endif /* !__MINGW32__ */
+     }
+ 
+   /* Enqueue all detected file events. */
+@@ -827,6 +961,24 @@
+     }
+   else
+     {
++#if defined (__MINGW32__)
++
++      /* NOTE: file_handler->mask is really abused here */
++      
++      for (file_ptr = gdb_notifier.first_file_handler;
++           file_ptr != NULL;
++           file_ptr = file_ptr->next_file)
++        if (file_ptr->mask)
++          {
++            file_ptr->mask = 0;
++    	    if (file_ptr->ready_mask == 0)
++	      {
++	        file_event_ptr = create_file_event (file_ptr->fd);
++	        async_queue_event (file_event_ptr, TAIL);
++  	        file_ptr->ready_mask = 1;
++	      }
++          }
++#else /* !__MINGW32__ */
+       for (file_ptr = gdb_notifier.first_file_handler;
+ 	   (file_ptr != NULL) && (num_found > 0);
+ 	   file_ptr = file_ptr->next_file)
+@@ -855,6 +1007,7 @@
+ 	    }
+ 	  file_ptr->ready_mask = mask;
+ 	}
++#endif /* !__MINGW32__ */
+     }
+   return 0;
+ }
+diff -Nru3 --exclude configure gdb-6.3/gdb/event-top.c gdb-6.3-1/gdb/event-top.c
+--- gdb-6.3/gdb/event-top.c	Thu Oct 14 22:44:24 2004
++++ gdb-6.3-1/gdb/event-top.c	Wed Feb 16 20:17:48 2005
+@@ -28,6 +28,10 @@
+ #include "event-top.h"
+ #include "interps.h"
+ #include <signal.h>
++#ifdef __MINGW32__
++  /* MinGW does not yet (mingw-runtime-2.2) define SIGQUIT */
++  #define SIGQUIT 3
++#endif
+ 
+ /* For dont_repeat() */
+ #include "gdbcmd.h"
+diff -Nru3 --exclude configure gdb-6.3/gdb/gdb_stat.h gdb-6.3-1/gdb/gdb_stat.h
+--- gdb-6.3/gdb/gdb_stat.h	Tue Apr  3 11:51:26 2001
++++ gdb-6.3-1/gdb/gdb_stat.h	Wed Feb 16 20:17:48 2005
+@@ -71,4 +71,21 @@
+ #define S_IROTH	S_IREAD
+ #endif
+ 
++/* MinGW does not define all the POSIX file modes. */
++#ifndef S_IRGRP
++#define S_IRGRP S_IREAD
++#endif
++#ifndef S_IWGRP
++#define S_IWGRP S_IWRITE
++#endif
++#ifndef S_IXGRP
++#define S_IXGRP S_IEXEC
++#endif
++#ifndef S_IWOTH
++#define S_IWOTH S_IWRITE
++#endif
++#ifndef S_IXOTH
++#define S_IXOTH S_IEXEC
++#endif
++
+ #endif /* !defined(GDB_STAT_H) */
+diff -Nru3 --exclude configure gdb-6.3/gdb/i386-win32-tdep.c gdb-6.3-1/gdb/i386-win32-tdep.c
+--- gdb-6.3/gdb/i386-win32-tdep.c	Thu Jan  1 10:00:00 1970
++++ gdb-6.3-1/gdb/i386-win32-tdep.c	Wed Feb 16 20:17:48 2005
+@@ -0,0 +1,77 @@
++/* Target-dependent code for Cygwin running on i386's, for GDB.
++
++   Copyright 2005 Free Software Foundation, Inc.
++
++   This file is part of GDB.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 2 of the License, or
++   (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 59 Temple Place - Suite 330,
++   Boston, MA 02111-1307, USA.  */
++
++#include "defs.h"
++#include "osabi.h"
++
++#include "gdb_string.h"
++
++#include "i386-tdep.h"
++
++static CORE_ADDR
++i386_win32_skip_trampoline_code (CORE_ADDR pc)
++{
++  return i386_pe_skip_trampoline_code (pc, NULL);
++}
++
++static int
++i386_win32_in_solib_call_trampoline (CORE_ADDR pc, char *name)
++{
++  return (i386_pe_skip_trampoline_code (pc, name) != 0);
++}
++
++static void
++i386_win32_init_abi (struct gdbarch_info info, struct gdbarch *gdbarch)
++{
++  struct gdbarch_tdep *tdep = gdbarch_tdep (gdbarch);
++
++  set_gdbarch_in_solib_call_trampoline (gdbarch,
++                                        i386_win32_in_solib_call_trampoline);
++  set_gdbarch_skip_trampoline_code (gdbarch, i386_win32_skip_trampoline_code);
++
++  tdep->struct_return = reg_struct_return;
++}
++
++static enum gdb_osabi
++i386_win32_osabi_sniffer (bfd * abfd)
++{ 
++  char *target_name = bfd_get_target (abfd);
++
++  /* Interix also uses pei-i386. 
++     We need a way to distinguish between the two. */
++  if (strcmp (target_name, "pei-i386") == 0)
++    return GDB_OSABI_WIN32;
++
++  return GDB_OSABI_UNKNOWN;
++}
++
++/* Provide a prototype to silence -Wmissing-prototypes.  */
++void _initialize_i386_win32_tdep (void);
++
++void
++_initialize_i386_win32_tdep (void)
++{
++  gdbarch_register_osabi_sniffer (bfd_arch_i386, bfd_target_coff_flavour,
++                                  i386_win32_osabi_sniffer);
++
++  gdbarch_register_osabi (bfd_arch_i386, 0, GDB_OSABI_WIN32,
++                          i386_win32_init_abi);
++}
+diff -Nru3 --exclude configure gdb-6.3/gdb/infcmd.c gdb-6.3-1/gdb/infcmd.c
+--- gdb-6.3/gdb/infcmd.c	Tue Sep 14 04:26:28 2004
++++ gdb-6.3-1/gdb/infcmd.c	Wed Feb 16 20:17:48 2005
+@@ -197,7 +197,7 @@
+ /* Environment to use for running inferior,
+    in format described in environ.h.  */
+ 
+-struct environ *inferior_environ;
++struct gdb_environ *inferior_environ;
+ 
+ /* Accessor routines. */
+ 
+diff -Nru3 --exclude configure gdb-6.3/gdb/inferior.h gdb-6.3-1/gdb/inferior.h
+--- gdb-6.3/gdb/inferior.h	Mon Sep 13 01:05:05 2004
++++ gdb-6.3-1/gdb/inferior.h	Wed Feb 16 20:17:48 2005
+@@ -145,7 +145,7 @@
+ 
+ /* Inferior environment. */
+ 
+-extern struct environ *inferior_environ;
++extern struct gdb_environ *inferior_environ;
+ 
+ extern void clear_proceed_status (void);
+ 
+diff -Nru3 --exclude configure gdb-6.3/gdb/osabi.c gdb-6.3-1/gdb/osabi.c
+--- gdb-6.3/gdb/osabi.c	Sat Jul  3 07:27:17 2004
++++ gdb-6.3-1/gdb/osabi.c	Wed Feb 16 20:17:48 2005
+@@ -77,6 +77,7 @@
+   "QNX Neutrino",
+ 
+   "Cygwin",
++  "Windows",
+ 
+   "<invalid>"
+ };
+diff -Nru3 --exclude configure gdb-6.3/gdb/remote-fileio.c gdb-6.3-1/gdb/remote-fileio.c
+--- gdb-6.3/gdb/remote-fileio.c	Wed Jan 28 10:19:51 2004
++++ gdb-6.3-1/gdb/remote-fileio.c	Wed Feb 16 20:17:48 2005
+@@ -404,16 +404,24 @@
+   remote_fileio_to_fio_uint ((long) st->st_gid, fst->fst_gid);
+   remote_fileio_to_fio_uint ((long) st->st_rdev, fst->fst_rdev);
+   remote_fileio_to_fio_ulong ((LONGEST) st->st_size, fst->fst_size);
++#if HAVE_STRUCT_STAT_ST_BLKSIZE
+   remote_fileio_to_fio_ulong ((LONGEST) st->st_blksize, fst->fst_blksize);
++#endif
+ #if HAVE_STRUCT_STAT_ST_BLOCKS
+   remote_fileio_to_fio_ulong ((LONGEST) st->st_blocks, fst->fst_blocks);
+-#else
++#elif __MSDOS__
+   /* FIXME: This is correct for DJGPP, but other systems that don't
+      have st_blocks, if any, might prefer 512 instead of st_blksize.
+-     (eliz, 30-12-2003)  */
++     (eliz, 30-12-2003).
++  */
+   remote_fileio_to_fio_ulong (((LONGEST) st->st_size + st->st_blksize - 1)
+ 			      / (LONGEST) st->st_blksize,
+ 			      fst->fst_blocks);
++#else
++  /* MinGW does not have st_blksize or st_blocks.
++     (ccj, 21-05-2004). */
++  remote_fileio_to_fio_ulong (((LONGEST) st->st_size + 512 - 1) / 512,
++			      fst->fst_blocks);
+ #endif
+   remote_fileio_to_fio_time (st->st_atime, fst->fst_atime);
+   remote_fileio_to_fio_time (st->st_mtime, fst->fst_mtime);
+@@ -1129,11 +1137,18 @@
+       remote_fileio_to_fio_uint (1, fst.fst_dev);
+       st.st_mode = S_IFCHR | (fd == FIO_FD_CONSOLE_IN ? S_IRUSR : S_IWUSR);
+       st.st_nlink = 1;
++#if defined (__MINGW32__)
++      st.st_uid = 0;
++      st.st_gid = 0;
++#else /* !__MINGW32__ */
+       st.st_uid = getuid ();
+       st.st_gid = getgid ();
++#endif /* !__MINGW32__ */
+       st.st_rdev = 0;
+       st.st_size = 0;
++#if HAVE_STRUCT_STAT_ST_BLKSIZE
+       st.st_blksize = 512;
++#endif
+ #if HAVE_STRUCT_STAT_ST_BLOCKS
+       st.st_blocks = 0;
+ #endif
+diff -Nru3 --exclude configure gdb-6.3/gdb/remote.c gdb-6.3-1/gdb/remote.c
+--- gdb-6.3/gdb/remote.c	Sat Nov  6 10:38:25 2004
++++ gdb-6.3-1/gdb/remote.c	Wed Feb 16 20:17:48 2005
+@@ -44,6 +44,15 @@
+ #include <ctype.h>
+ #include <sys/time.h>
+ 
++#if defined (__MINGW32__)
++/*
++ * Select and fd support only works for sockets. MinGW currently
++ * only support remote sockets so this works until serial ports
++ * are supported.
++ */
++#include <winsock2.h>
++#endif /* __MINGW32__ */
++
+ #include "event-loop.h"
+ #include "event-top.h"
+ #include "inf-loop.h"
+diff -Nru3 --exclude configure gdb-6.3/gdb/ser-mingw.c gdb-6.3-1/gdb/ser-mingw.c
+--- gdb-6.3/gdb/ser-mingw.c	Thu Jan  1 10:00:00 1970
++++ gdb-6.3-1/gdb/ser-mingw.c	Wed Feb 16 20:17:48 2005
+@@ -0,0 +1,529 @@
++/* Serial interface for TCP connections on MingW Windows systems
++   Copyright 1992, 1993, 1994, 1995, 1996, 1998, 1999, 2000, 2001
++   Free Software Foundation, Inc.
++
++   This file is part of GDB.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 2 of the License, or
++   (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 59 Temple Place - Suite 330,
++   Boston, MA 02111-1307, USA.  */
++
++#include "defs.h"
++#include "serial.h"
++#include "ser-mingw.h"
++
++#include <fcntl.h>
++#include <sys/time.h>
++
++#include <winsock2.h>
++
++#include "gdb_string.h"
++#include "event-loop.h"
++
++/* this is a quick hack stolen from rdi-share/hostchan.c */
++void
++gettimeofday( struct timeval *time_now, void *dummy )
++{
++  time_t t = clock();
++  time_now->tv_sec = t/CLOCKS_PER_SEC;
++  time_now->tv_usec = (t%CLOCKS_PER_SEC)*(1000000/CLOCKS_PER_SEC);
++}
++
++static int do_mingw_readchar (struct serial *scb, int timeout);
++static timer_handler_func push_event;
++static handler_func fd_event;
++static void reschedule (struct serial *scb);
++
++/* Generic operations used by all UNIX/FD based serial interfaces. */
++
++serial_ttystate
++ser_mingw_nop_get_tty_state (struct serial *scb)
++{
++  /* allocate a dummy */
++  return (serial_ttystate) XMALLOC (int);
++}
++
++int
++ser_mingw_nop_set_tty_state (struct serial *scb, serial_ttystate ttystate)
++{
++  return 0;
++}
++
++void
++ser_mingw_nop_raw (struct serial *scb)
++{
++  return;			/* Always in raw mode */
++}
++
++/* Wait for input on scb, with timeout seconds.  Returns 0 on success,
++   otherwise SERIAL_TIMEOUT or SERIAL_ERROR. */
++
++int
++ser_mingw_wait_for (struct serial *scb, int timeout)
++{
++  while (1)
++    {
++      int numfds;
++      struct timeval tv;
++      fd_set readfds, exceptfds;
++
++      /* NOTE: Some OS's can scramble the READFDS when the select()
++         call fails (ex the kernel with Red Hat 5.2).  Initialize all
++         arguments before each call. */
++
++      tv.tv_sec = timeout;
++      tv.tv_usec = 0;
++
++      FD_ZERO (&readfds);
++      FD_ZERO (&exceptfds);
++      FD_SET (scb->fd, &readfds);
++      FD_SET (scb->fd, &exceptfds);
++
++      if (timeout >= 0)
++	numfds = select (scb->fd + 1, &readfds, 0, &exceptfds, &tv);
++      else
++	numfds = select (scb->fd + 1, &readfds, 0, &exceptfds, 0);
++
++      if (numfds <= 0)
++	{
++	  if (numfds == 0)
++	    return SERIAL_TIMEOUT;
++	  else if (errno == EINTR)
++	    continue;
++	  else
++	    return SERIAL_ERROR;	/* Got an error from select or poll */
++	}
++
++      return 0;
++    }
++}
++
++/* Read a character with user-specified timeout.  TIMEOUT is number of seconds
++   to wait, or -1 to wait forever.  Use timeout of 0 to effect a poll.  Returns
++   char if successful.  Returns -2 if timeout expired, EOF if line dropped
++   dead, or -3 for any other error (see errno in that case). */
++
++static int
++do_mingw_readchar (struct serial *scb, int timeout)
++{
++  int status;
++  int delta;
++
++  /* We have to be able to keep the GUI alive here, so we break the original
++     timeout into steps of 1 second, running the "keep the GUI alive" hook 
++     each time through the loop.
++
++     Also, timeout = 0 means to poll, so we just set the delta to 0, so we
++     will only go through the loop once. */
++
++  delta = (timeout == 0 ? 0 : 1);
++  while (1)
++    {
++
++      /* N.B. The UI may destroy our world (for instance by calling
++         remote_stop,) in which case we want to get out of here as
++         quickly as possible.  It is not safe to touch scb, since
++         someone else might have freed it.  The ui_loop_hook signals that 
++         we should exit by returning 1. */
++
++      if (deprecated_ui_loop_hook)
++	{
++	  if (deprecated_ui_loop_hook (0))
++	    return SERIAL_TIMEOUT;
++	}
++
++      status = ser_mingw_wait_for (scb, delta);
++      if (timeout > 0)
++        timeout -= delta;
++
++      /* If we got a character or an error back from wait_for, then we can 
++         break from the loop before the timeout is completed. */
++
++      if (status != SERIAL_TIMEOUT)
++	{
++	  break;
++	}
++
++      /* If we have exhausted the original timeout, then generate
++         a SERIAL_TIMEOUT, and pass it out of the loop. */
++
++      else if (timeout == 0)
++	{
++	  status = SERIAL_TIMEOUT;
++	  break;
++	}
++    }
++
++  if (status < 0)
++    return status;
++
++  while (1)
++    {
++      status = recv (scb->fd, scb->buf, BUFSIZ, 0);
++      if (status != -1 || errno != EINTR)
++	break;
++    }
++
++  if (status <= 0)
++    {
++      if (status == 0)
++	return SERIAL_TIMEOUT;	/* 0 chars means timeout [may need to
++				   distinguish between EOF & timeouts
++				   someday] */
++      else
++	return SERIAL_ERROR;	/* Got an error from read */
++    }
++
++  scb->bufcnt = status;
++  scb->bufcnt--;
++  scb->bufp = scb->buf;
++  return *scb->bufp++;
++}
++
++/* Perform operations common to both old and new readchar. */
++
++/* Return the next character from the input FIFO.  If the FIFO is
++   empty, call the SERIAL specific routine to try and read in more
++   characters.
++
++   Initially data from the input FIFO is returned (fd_event()
++   pre-reads the input into that FIFO.  Once that has been emptied,
++   further data is obtained by polling the input FD using the device
++   specific readchar() function.  Note: reschedule() is called after
++   every read.  This is because there is no guarentee that the lower
++   level fd_event() poll_event() code (which also calls reschedule())
++   will be called. */
++
++static int
++generic_readchar (struct serial *scb, int timeout,
++		  int (do_readchar) (struct serial *scb, int timeout))
++{
++  int ch;
++  if (scb->bufcnt > 0)
++    {
++      ch = *scb->bufp;
++      scb->bufcnt--;
++      scb->bufp++;
++    }
++  else if (scb->bufcnt < 0)
++    {
++      /* Some errors/eof are are sticky. */
++      ch = scb->bufcnt;
++    }
++  else
++    {
++      ch = do_readchar (scb, timeout);
++      if (ch < 0)
++	{
++	  switch ((enum serial_rc) ch)
++	    {
++	    case SERIAL_EOF:
++	    case SERIAL_ERROR:
++	      /* Make the error/eof stick. */
++	      scb->bufcnt = ch;
++	      break;
++	    case SERIAL_TIMEOUT:
++	      scb->bufcnt = 0;
++	      break;
++	    }
++	}
++    }
++  reschedule (scb);
++  return ch;
++}
++
++int
++ser_mingw_readchar (struct serial *scb, int timeout)
++{
++  return generic_readchar (scb, timeout, do_mingw_readchar);
++}
++
++int
++ser_mingw_nop_noflush_set_tty_state (struct serial *scb,
++				    serial_ttystate new_ttystate,
++				    serial_ttystate old_ttystate)
++{
++  return 0;
++}
++
++void
++ser_mingw_nop_print_tty_state (struct serial *scb, 
++			      serial_ttystate ttystate,
++			      struct ui_file *stream)
++{
++  /* Nothing to print.  */
++  return;
++}
++
++int
++ser_mingw_nop_setbaudrate (struct serial *scb, int rate)
++{
++  return 0;			/* Never fails! */
++}
++
++int
++ser_mingw_nop_setstopbits (struct serial *scb, int num)
++{
++  return 0;			/* Never fails! */
++}
++
++int
++ser_mingw_write (struct serial *scb, const char *str, int len)
++{
++  int cc;
++
++  while (len > 0)
++    {
++      cc = send (scb->fd, str, len, 0);
++
++      if (cc < 0)
++	return 1;
++      len -= cc;
++      str += cc;
++    }
++  return 0;
++}
++
++int
++ser_mingw_nop_flush_output (struct serial *scb)
++{
++  return 0;
++}
++
++int
++ser_mingw_flush_input (struct serial *scb)
++{
++  if (scb->bufcnt >= 0)
++    {
++      scb->bufcnt = 0;
++      scb->bufp = scb->buf;
++      return 0;
++    }
++  else
++    return SERIAL_ERROR;
++}
++
++int
++ser_mingw_nop_send_break (struct serial *scb)
++{
++  return 0;
++}
++
++int
++ser_mingw_nop_drain_output (struct serial *scb)
++{
++  return 0;
++}
++
++
++
++/* Event handling for ASYNC serial code.
++
++   At any time the SERIAL device either: has an empty FIFO and is
++   waiting on a FD event; or has a non-empty FIFO/error condition and
++   is constantly scheduling timer events.
++
++   ASYNC only stops pestering its client when it is de-async'ed or it
++   is told to go away. */
++
++/* Value of scb->async_state: */
++enum {
++  /* >= 0 (TIMER_SCHEDULED) */
++  /* The ID of the currently scheduled timer event. This state is
++     rarely encountered.  Timer events are one-off so as soon as the
++     event is delivered the state is shanged to NOTHING_SCHEDULED. */
++  FD_SCHEDULED = -1,
++  /* The fd_event() handler is scheduled.  It is called when ever the
++     file descriptor becomes ready. */
++  NOTHING_SCHEDULED = -2
++  /* Either no task is scheduled (just going into ASYNC mode) or a
++     timer event has just gone off and the current state has been
++     forced into nothing scheduled. */
++};
++
++/* Identify and schedule the next ASYNC task based on scb->async_state
++   and scb->buf* (the input FIFO).  A state machine is used to avoid
++   the need to make redundant calls into the event-loop - the next
++   scheduled task is only changed when needed. */
++
++static void
++reschedule (struct serial *scb)
++{
++  if (serial_is_async_p (scb))
++    {
++      int next_state;
++      switch (scb->async_state)
++	{
++	case FD_SCHEDULED:
++	  if (scb->bufcnt == 0)
++	    next_state = FD_SCHEDULED;
++	  else
++	    {
++	      delete_file_handler (scb->fd);
++	      next_state = create_timer (0, push_event, scb);
++	    }
++	  break;
++	case NOTHING_SCHEDULED:
++	  if (scb->bufcnt == 0)
++	    {
++	      add_file_handler (scb->fd, fd_event, scb);
++	      next_state = FD_SCHEDULED;
++	    }
++	  else
++	    {
++	      next_state = create_timer (0, push_event, scb);
++	    }
++	  break;
++	default: /* TIMER SCHEDULED */
++	  if (scb->bufcnt == 0)
++	    {
++	      delete_timer (scb->async_state);
++	      add_file_handler (scb->fd, fd_event, scb);
++	      next_state = FD_SCHEDULED;
++	    }
++	  else
++	    next_state = scb->async_state;
++	  break;
++	}
++      if (serial_debug_p (scb))
++	{
++	  switch (next_state)
++	    {
++	    case FD_SCHEDULED:
++	      if (scb->async_state != FD_SCHEDULED)
++		fprintf_unfiltered (gdb_stdlog, "[fd%d->fd-scheduled]\n",
++				    scb->fd);
++	      break;
++	    default: /* TIMER SCHEDULED */
++	      if (scb->async_state == FD_SCHEDULED)
++		fprintf_unfiltered (gdb_stdlog, "[fd%d->timer-scheduled]\n",
++				    scb->fd);
++	      break;
++	    }
++	}
++      scb->async_state = next_state;
++    }
++}
++
++/* FD_EVENT: This is scheduled when the input FIFO is empty (and there
++   is no pending error).  As soon as data arrives, it is read into the
++   input FIFO and the client notified.  The client should then drain
++   the FIFO using readchar().  If the FIFO isn't immediatly emptied,
++   push_event() is used to nag the client until it is. */
++
++static void
++fd_event (int error, void *context)
++{
++  struct serial *scb = context;
++  if (error != 0)
++    {
++      scb->bufcnt = SERIAL_ERROR;
++    }
++  else if (scb->bufcnt == 0)
++    {
++      /* Prime the input FIFO.  The readchar() function is used to
++         pull characters out of the buffer.  See also
++         generic_readchar(). */
++      int nr;
++      do
++	{
++	  nr = read (scb->fd, scb->buf, BUFSIZ);
++	}
++      while (nr == -1 && errno == EINTR);
++      if (nr == 0)
++	{
++	  scb->bufcnt = SERIAL_EOF;
++	}
++      else if (nr > 0)
++	{
++	  scb->bufcnt = nr;
++	  scb->bufp = scb->buf;
++	}
++      else
++	{
++	  scb->bufcnt = SERIAL_ERROR;
++	}
++    }
++  scb->async_handler (scb, scb->async_context);
++  reschedule (scb);
++}
++
++/* PUSH_EVENT: The input FIFO is non-empty (or there is a pending
++   error).  Nag the client until all the data has been read.  In the
++   case of errors, the client will need to close or de-async the
++   device before naging stops. */
++
++static void
++push_event (void *context)
++{
++  struct serial *scb = context;
++  scb->async_state = NOTHING_SCHEDULED; /* Timers are one-off */
++  scb->async_handler (scb, scb->async_context);
++  /* re-schedule */
++  reschedule (scb);
++}
++
++/* Put the SERIAL device into/out-of ASYNC mode.  */
++
++void
++ser_mingw_async (struct serial *scb,
++		int async_p)
++{
++  if (async_p)
++    {
++      /* Force a re-schedule. */
++      scb->async_state = NOTHING_SCHEDULED;
++      if (serial_debug_p (scb))
++	fprintf_unfiltered (gdb_stdlog, "[fd%d->asynchronous]\n",
++			    scb->fd);
++      reschedule (scb);
++    }
++  else
++    {
++      if (serial_debug_p (scb))
++	fprintf_unfiltered (gdb_stdlog, "[fd%d->synchronous]\n",
++			    scb->fd);
++      /* De-schedule whatever tasks are currently scheduled. */
++      switch (scb->async_state)
++	{
++	case FD_SCHEDULED:
++	  delete_file_handler (scb->fd);
++	  break;
++  case NOTHING_SCHEDULED:
++	  break;
++	default: /* TIMER SCHEDULED */
++	  delete_timer (scb->async_state);
++	  break;
++	}
++    }
++}
++
++void
++ser_platform_tcp_init (struct serial_ops *ops)
++{
++  ops->readchar = ser_mingw_readchar;
++  ops->write = ser_mingw_write;
++  ops->flush_output = ser_mingw_nop_flush_output;
++  ops->flush_input = ser_mingw_flush_input;
++  ops->send_break = ser_mingw_nop_send_break;
++  ops->go_raw = ser_mingw_nop_raw;
++  ops->get_tty_state = ser_mingw_nop_get_tty_state;
++  ops->set_tty_state = ser_mingw_nop_set_tty_state;
++  ops->print_tty_state = ser_mingw_nop_print_tty_state;
++  ops->noflush_set_tty_state = ser_mingw_nop_noflush_set_tty_state;
++  ops->setbaudrate = ser_mingw_nop_setbaudrate;
++  ops->setstopbits = ser_mingw_nop_setstopbits;
++  ops->drain_output = ser_mingw_nop_drain_output;
++  ops->async = ser_mingw_async;
++}
+diff -Nru3 --exclude configure gdb-6.3/gdb/ser-mingw.h gdb-6.3-1/gdb/ser-mingw.h
+--- gdb-6.3/gdb/ser-mingw.h	Thu Jan  1 10:00:00 1970
++++ gdb-6.3-1/gdb/ser-mingw.h	Wed Feb 16 20:17:48 2005
+@@ -0,0 +1,51 @@
++/* Serial interface for MinGW Winsock file-descriptor based connection.
++
++   Copyright 1999, 2000, 2002 Free Software Foundation, Inc.
++
++   This file is part of GDB.
++
++   This program is free software; you can redistribute it and/or modify
++   it under the terms of the GNU General Public License as published by
++   the Free Software Foundation; either version 2 of the License, or
++   (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program; if not, write to the Free Software
++   Foundation, Inc., 59 Temple Place - Suite 330,
++   Boston, MA 02111-1307, USA.  */
++
++#ifndef SER_MINGW_H
++#define SER_MINGW_H
++
++/* Generic MinGW Winsock functions */
++
++extern int ser_mingw_nop_flush_output (struct serial *scb);
++extern int ser_mingw_flush_input (struct serial *scb);
++extern int ser_mingw_nop_send_break (struct serial *scb);
++extern void ser_mingw_nop_raw (struct serial *scb);
++extern serial_ttystate ser_mingw_nop_get_tty_state (struct serial *scb);
++extern int ser_mingw_nop_set_tty_state (struct serial *scb,
++				       serial_ttystate ttystate);
++extern void ser_mingw_nop_print_tty_state (struct serial *scb,
++					  serial_ttystate ttystate,
++					  struct ui_file *stream);
++extern int ser_mingw_nop_noflush_set_tty_state (struct serial *scb,
++					       serial_ttystate new_ttystate,
++					       serial_ttystate old_ttystate);
++extern int ser_mingw_nop_setbaudrate (struct serial *scb, int rate);
++extern int ser_mingw_nop_setstopbits (struct serial *scb, int rate);
++extern int ser_mingw_nop_drain_output (struct serial *scb);
++
++extern int ser_mingw_wait_for (struct serial *scb, int timeout);
++extern int ser_mingw_readchar (struct serial *scb, int timeout);
++
++extern int ser_mingw_write (struct serial *scb, const char *str, int len);
++
++extern void ser_mingw_async (struct serial *scb, int async_p);
++
++#endif
+diff -Nru3 --exclude configure gdb-6.3/gdb/ser-tcp.c gdb-6.3-1/gdb/ser-tcp.c
+--- gdb-6.3/gdb/ser-tcp.c	Sat Jun 26 05:46:08 2004
++++ gdb-6.3-1/gdb/ser-tcp.c	Wed Feb 16 20:17:48 2005
+@@ -21,7 +21,6 @@
+ 
+ #include "defs.h"
+ #include "serial.h"
+-#include "ser-unix.h"
+ 
+ #include <sys/types.h>
+ 
+@@ -33,15 +32,50 @@
+ #endif
+ 
+ #include <sys/time.h>
++
++#if !defined (__MINGW32__)
+ #include <netinet/in.h>
+ #include <arpa/inet.h>
+ #include <netdb.h>
+ #include <sys/socket.h>
+ #include <netinet/tcp.h>
+-
+ #include <signal.h>
++#else /* !__MINGW32__ */
++#include <winsock2.h>
++#endif /* !__MINGW32__ */
++
+ #include "gdb_string.h"
+ 
++/*
++ * Winsock needs to be started manually.
++ */
++
++#if defined (__MINGW32__)
++#define ECONNREFUSED WSAECONNREFUSED
++#define EINPROGRESS  WSAEINPROGRESS
++#define ETIMEDOUT    WSAETIMEDOUT
++
++static int ws_started;
++static int
++net_open_winsock ()
++{
++  if (!ws_started) {
++    WORD    wVersionRequested;
++    WSADATA wsaData;
++    int     err;
++
++    wVersionRequested = MAKEWORD (2, 2);
++    err = WSAStartup (wVersionRequested, &wsaData);
++    if (err)
++      return 0;
++    ws_started = 1;
++  }
++  return 1;
++}
++#endif /* !__MINGW32__ */
++
++extern void ser_platform_tcp_init (struct serial_ops *ops);
++
+ static int net_open (struct serial *scb, const char *name);
+ static void net_close (struct serial *scb);
+ void _initialize_ser_tcp (void);
+@@ -85,6 +119,15 @@
+   if (!hostname[0])
+     strcpy (hostname, "localhost");
+ 
++#if defined (__MINGW32__)
++  if (!net_open_winsock ())
++    {
++      fprintf_unfiltered (gdb_stderr, "error WINSOCK startup\n");
++      errno = ENOENT;
++      return -1;
++    }    
++#endif /* __MINGW32__ */
++  
+   hostent = gethostbyname (hostname);
+   if (!hostent)
+     {
+@@ -106,9 +149,11 @@
+   memcpy (&sockaddr.sin_addr.s_addr, hostent->h_addr,
+ 	  sizeof (struct in_addr));
+ 
++#if !defined (__MINGW32__)
+   /* set socket nonblocking */
+   tmp = 1;
+   ioctl (scb->fd, FIONBIO, &tmp);
++#endif /* !__MINGW32__ */
+ 
+   /* Use Non-blocking connect.  connect() will return 0 if connected already. */
+   n = connect (scb->fd, (struct sockaddr *) &sockaddr, sizeof (sockaddr));
+@@ -174,10 +219,12 @@
+       }
+   } 
+ 
++#if !defined (__MINGW32__)
+   /* turn off nonblocking */
+   tmp = 0;
+   ioctl (scb->fd, FIONBIO, &tmp);
+-
++#endif /* !__MINGW32__ */
++  
+   if (use_udp == 0)
+     {
+       /* Disable Nagle algorithm. Needed in some cases. */
+@@ -188,7 +235,9 @@
+ 
+   /* If we don't do this, then GDB simply exits
+      when the remote side dies.  */
++#if !defined (__MINGW32__)
+   signal (SIGPIPE, SIG_IGN);
++#endif /* !__MINGW32__ */
+ 
+   return 0;
+ }
+@@ -212,19 +261,6 @@
+   ops->next = 0;
+   ops->open = net_open;
+   ops->close = net_close;
+-  ops->readchar = ser_unix_readchar;
+-  ops->write = ser_unix_write;
+-  ops->flush_output = ser_unix_nop_flush_output;
+-  ops->flush_input = ser_unix_flush_input;
+-  ops->send_break = ser_unix_nop_send_break;
+-  ops->go_raw = ser_unix_nop_raw;
+-  ops->get_tty_state = ser_unix_nop_get_tty_state;
+-  ops->set_tty_state = ser_unix_nop_set_tty_state;
+-  ops->print_tty_state = ser_unix_nop_print_tty_state;
+-  ops->noflush_set_tty_state = ser_unix_nop_noflush_set_tty_state;
+-  ops->setbaudrate = ser_unix_nop_setbaudrate;
+-  ops->setstopbits = ser_unix_nop_setstopbits;
+-  ops->drain_output = ser_unix_nop_drain_output;
+-  ops->async = ser_unix_async;
++  ser_platform_tcp_init (ops);
+   serial_add_interface (ops);
+ }
+diff -Nru3 --exclude configure gdb-6.3/gdb/ser-unix.c gdb-6.3-1/gdb/ser-unix.c
+--- gdb-6.3/gdb/ser-unix.c	Sat Jun 26 05:46:08 2004
++++ gdb-6.3-1/gdb/ser-unix.c	Wed Feb 16 20:17:48 2005
+@@ -1335,6 +1335,25 @@
+ }
+ 
+ void
++ser_platform_tcp_init (struct serial_ops *ops)
++{
++  ops->readchar = ser_unix_readchar;
++  ops->write = ser_unix_write;
++  ops->flush_output = ser_unix_nop_flush_output;
++  ops->flush_input = ser_unix_flush_input;
++  ops->send_break = ser_unix_nop_send_break;
++  ops->go_raw = ser_unix_nop_raw;
++  ops->get_tty_state = ser_unix_nop_get_tty_state;
++  ops->set_tty_state = ser_unix_nop_set_tty_state;
++  ops->print_tty_state = ser_unix_nop_print_tty_state;
++  ops->noflush_set_tty_state = ser_unix_nop_noflush_set_tty_state;
++  ops->setbaudrate = ser_unix_nop_setbaudrate;
++  ops->setstopbits = ser_unix_nop_setstopbits;
++  ops->drain_output = ser_unix_nop_drain_output;
++  ops->async = ser_unix_async;
++}
++
++void
+ _initialize_ser_hardwire (void)
+ {
+   struct serial_ops *ops = XMALLOC (struct serial_ops);
+diff -Nru3 --exclude configure gdb-6.3/gdb/serial.c gdb-6.3-1/gdb/serial.c
+--- gdb-6.3/gdb/serial.c	Tue Jul 27 00:53:04 2004
++++ gdb-6.3-1/gdb/serial.c	Wed Feb 16 20:17:48 2005
+@@ -329,12 +329,16 @@
+ void
+ serial_close (struct serial *scb)
+ {
++  if (!scb)
++    return;
+   do_serial_close (scb, 1);
+ }
+ 
+ void
+ serial_un_fdopen (struct serial *scb)
+ {
++  if (!scb)
++    return;
+   do_serial_close (scb, 0);
+ }
+ 
+@@ -343,6 +347,9 @@
+ {
+   int ch;
+ 
++  if (!scb)
++    return 0;
++
+   /* FIXME: cagney/1999-10-11: Don't enable this check until the ASYNC
+      code is finished. */
+   if (0 && serial_is_async_p (scb) && timeout < 0)
+@@ -384,6 +391,9 @@
+       gdb_flush (serial_logfp);
+     }
+ 
++  if (!scb)
++    return 0;
++
+   return (scb->ops->write (scb, str, len));
+ }
+ 
+@@ -404,24 +414,33 @@
+ int
+ serial_drain_output (struct serial *scb)
+ {
++  if (!scb)
++    return 0;
+   return scb->ops->drain_output (scb);
+ }
+ 
+ int
+ serial_flush_output (struct serial *scb)
+ {
++  if (!scb)
++    return 0;
+   return scb->ops->flush_output (scb);
+ }
+ 
+ int
+ serial_flush_input (struct serial *scb)
+ {
++  if (!scb)
++    return 0;
+   return scb->ops->flush_input (scb);
+ }
+ 
+ int
+ serial_send_break (struct serial *scb)
+ {
++  if (!scb)
++    return 0;
++
+   if (serial_logfp != NULL)
+     serial_logchar (serial_logfp, 'w', SERIAL_BREAK, 0);
+ 
+@@ -431,18 +450,24 @@
+ void
+ serial_raw (struct serial *scb)
+ {
++  if (!scb)
++    return;
+   scb->ops->go_raw (scb);
+ }
+ 
+ serial_ttystate
+ serial_get_tty_state (struct serial *scb)
+ {
++  if (!scb)
++    return 0;
+   return scb->ops->get_tty_state (scb);
+ }
+ 
+ int
+ serial_set_tty_state (struct serial *scb, serial_ttystate ttystate)
+ {
++  if (!scb)
++    return 0;
+   return scb->ops->set_tty_state (scb, ttystate);
+ }
+ 
+@@ -451,6 +476,8 @@
+ 			serial_ttystate ttystate,
+ 			struct ui_file *stream)
+ {
++  if (!scb)
++    return;
+   scb->ops->print_tty_state (scb, ttystate, stream);
+ }
+ 
+@@ -459,30 +486,40 @@
+ 			      serial_ttystate new_ttystate,
+ 			      serial_ttystate old_ttystate)
+ {
++  if (!scb)
++    return 0;
+   return scb->ops->noflush_set_tty_state (scb, new_ttystate, old_ttystate);
+ }
+ 
+ int
+ serial_setbaudrate (struct serial *scb, int rate)
+ {
++  if (!scb)
++    return 0;
+   return scb->ops->setbaudrate (scb, rate);
+ }
+ 
+ int
+ serial_setstopbits (struct serial *scb, int num)
+ {
++  if (!scb)
++    return 0;
+   return scb->ops->setstopbits (scb, num);
+ }
+ 
+ int
+ serial_can_async_p (struct serial *scb)
+ {
++  if (!scb)
++    return 0;
+   return (scb->ops->async != NULL);
+ }
+ 
+ int
+ serial_is_async_p (struct serial *scb)
+ {
++  if (!scb)
++    return 0;
+   return (scb->ops->async != NULL) && (scb->async_handler != NULL);
+ }
+ 
+@@ -491,6 +528,9 @@
+ 	      serial_event_ftype *handler,
+ 	      void *context)
+ {
++  if (!scb)
++    return;
++
+   /* Only change mode if there is a need. */
+   if ((scb->async_handler == NULL)
+       != (handler == NULL))
+diff -Nru3 --exclude configure gdb-6.3/gdb/top.c gdb-6.3-1/gdb/top.c
+--- gdb-6.3/gdb/top.c	Thu Oct 14 22:44:23 2004
++++ gdb-6.3-1/gdb/top.c	Wed Feb 16 20:17:48 2005
+@@ -46,6 +46,11 @@
+ #include "doublest.h"
+ #include "gdb_assert.h"
+ 
++#ifdef __MINGW32__
++  /* MinGW does not yet (mingw-runtime-2.2) define SIGQUIT */
++  #define SIGQUIT 3
++#endif
++
+ /* readline include files */
+ #include "readline/readline.h"
+ #include "readline/history.h"
+diff -Nru3 --exclude configure gdb-6.3/gdb/utils.c gdb-6.3-1/gdb/utils.c
+--- gdb-6.3/gdb/utils.c	Fri Oct  1 05:57:54 2004
++++ gdb-6.3-1/gdb/utils.c	Wed Feb 16 20:17:48 2005
+@@ -66,6 +66,10 @@
+ 
+ #include "readline/readline.h"
+ 
++#if defined (__MINGW32__)
++#include <windows.h>
++#endif
++
+ #ifdef NEED_DECLARATION_MALLOC
+ extern PTR malloc ();		/* OK: PTR */
+ #endif
+@@ -823,8 +827,10 @@
+     {
+       if (dump_core_p)
+ 	{
++#ifndef CANT_FORK
+ 	  if (fork () == 0)
+ 	    abort ();		/* NOTE: GDB has only three calls to abort().  */
++#endif
+ 	}
+     }
+ 
+@@ -1669,6 +1675,7 @@
+       lines_per_page = rows;
+       chars_per_line = cols;
+ 
++#if !defined (__MINGW32__)
+       /* Readline should have fetched the termcap entry for us.  */
+       if (tgetnum ("li") < 0 || getenv ("EMACS"))
+ 	{
+@@ -1677,7 +1684,8 @@
+ 	     not useful (e.g. emacs shell window), so disable paging.  */
+ 	  lines_per_page = UINT_MAX;
+ 	}
+-
++#endif
++      
+       /* FIXME: Get rid of this junk.  */
+ #if defined(SIGWINCH) && defined(SIGWINCH_HANDLER)
+       SIGWINCH_HANDLER (SIGWINCH);
+diff -Nru3 --exclude configure gdb-6.3/gdb/win32-nat.c gdb-6.3-1/gdb/win32-nat.c
+--- gdb-6.3/gdb/win32-nat.c	Sat Oct  9 06:29:56 2004
++++ gdb-6.3-1/gdb/win32-nat.c	Wed Feb 16 20:17:48 2005
+@@ -24,8 +24,6 @@
+ 
+ /* Originally by Steve Chamberlain, sac@cygnus.com */
+ 
+-/* We assume we're being built with and will be used for cygwin.  */
+-
+ #include "defs.h"
+ #include "frame.h"		/* required by inferior.h */
+ #include "inferior.h"
+@@ -41,7 +39,10 @@
+ #include <stdlib.h>
+ #include <windows.h>
+ #include <imagehlp.h>
++
++#if defined (__CYGWIN__)
+ #include <sys/cygwin.h>
++#endif /* __CYGWIN__ */
+ 
+ #include "buildsym.h"
+ #include "symfile.h"
+@@ -50,6 +51,9 @@
+ #include "gdbthread.h"
+ #include "gdbcmd.h"
+ #include <sys/param.h>
++#ifdef __MINGW32__
++  #define MAXPATHLEN PATH_MAX
++#endif
+ #include <unistd.h>
+ #include "exec.h"
+ 
+@@ -66,7 +70,65 @@
+     CONTEXT_DEBUGGER = (CONTEXT_FULL | CONTEXT_FLOATING_POINT)
+   };
+ #endif
+-#include <sys/procfs.h>
++#ifndef __MINGW32__
++  #include <sys/procfs.h>
++#else
++  #define	NOTE_INFO_PROCESS	1
++  #define	NOTE_INFO_THREAD	2
++  #define	NOTE_INFO_MODULE	3
++
++  struct win32_core_process_info
++  {
++    DWORD pid;
++    int signal;
++    int command_line_size;
++    char command_line[1];
++  }
++  #ifdef __GNUC__
++    __attribute__ ((packed))
++  #endif
++  ;
++
++  struct win32_core_thread_info
++  {
++    DWORD tid;
++    BOOL is_active_thread;
++    CONTEXT thread_context;
++  }
++  #ifdef __GNUC__
++    __attribute__ ((packed))
++  #endif
++  ;
++
++  struct win32_core_module_info
++  {
++    void* base_address;
++    int module_name_size;
++    char module_name[1];
++  }
++  #ifdef __GNUC__
++    __attribute__ ((packed))
++  #endif
++  ;
++
++  struct win32_pstatus
++  {
++    unsigned long data_type;
++    union
++      {
++        struct win32_core_process_info process_info;
++        struct win32_core_thread_info thread_info;
++        struct win32_core_module_info module_info;
++      } data ;
++  }
++  #ifdef __GNUC__
++    __attribute__ ((packed))
++  #endif
++  ;
++
++  typedef struct win32_pstatus win32_pstatus_t ;
++
++#endif
+ #include <psapi.h>
+ 
+ #define CONTEXT_DEBUGGER_DR CONTEXT_DEBUGGER | CONTEXT_DEBUG_REGISTERS \
+@@ -88,6 +150,7 @@
+ 
+ static void child_stop (void);
+ static int win32_child_thread_alive (ptid_t);
++static char *win32_pid_to_str (ptid_t ptid);
+ void child_kill_inferior (void);
+ 
+ static enum target_signal last_sig = TARGET_SIGNAL_0;
+@@ -127,9 +190,9 @@
+ static int new_console = 0;
+ static int new_group = 1;
+ static int debug_exec = 0;		/* show execution */
+-static int debug_events = 0;		/* show events from kernel */
++static int debug_events = 1;	/* show events from kernel */
+ static int debug_memory = 0;		/* show target memory accesses */
+-static int debug_exceptions = 0;	/* show target exceptions */
++static int debug_exceptions = 1;	/* show target exceptions */
+ static int useshell = 0;		/* use shell for subprocesses */
+ 
+ /* This vector maps GDB's idea of a register's number into an address
+@@ -219,8 +282,29 @@
+ check (BOOL ok, const char *file, int line)
+ {
+   if (!ok)
+-    printf_filtered ("error return %s:%d was %lu\n", file, line,
+-		     GetLastError ());
++  {
++    LPVOID lpMsgBuf;
++    DWORD  last_error = GetLastError ();
++    if (!FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER | 
++                       FORMAT_MESSAGE_FROM_SYSTEM | 
++                       FORMAT_MESSAGE_IGNORE_INSERTS,
++                       NULL,
++                       last_error,
++                       MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
++                       (LPTSTR) &lpMsgBuf,
++                       0,
++                       NULL))
++    {
++      printf_filtered ("error return %s:%d was %lu\n", file, line,
++                       last_error);
++    }
++    else
++    {
++      printf_filtered ("error return %s:%d: [%lu] %s\n", file, line,
++                       last_error, (LPCTSTR) lpMsgBuf);
++      LocalFree (lpMsgBuf);
++    }
++  }
+ }
+ 
+ /* Find a thread record given a thread id.
+@@ -290,7 +374,6 @@
+ {
+   thread_info *th = &thread_head;
+ 
+-  DEBUG_EVENTS (("gdb: child_init_thread_list\n"));
+   init_thread_list ();
+   while (th->next != NULL)
+     {
+@@ -299,6 +382,7 @@
+       (void) CloseHandle (here->h);
+       xfree (here);
+     }
++  main_thread_id = 0;
+ }
+ 
+ /* Delete a thread from the list of threads */
+@@ -609,7 +693,12 @@
+ 	}
+     }
+ 
++#ifdef __CYGWIN__
+   cygwin_conv_to_posix_path (buf, ppath);
++#else
++  strcpy( ppath, buf);
++#endif
++
+   so = (struct so_stuff *) xmalloc (sizeof (struct so_stuff) + strlen (ppath) + 8 + 1);
+   so->loaded = 0;
+   so->load_addr = load_addr;
+@@ -1430,6 +1519,9 @@
+   extern int stop_after_trap;
+   int i;
+ 
++  DEBUG_EVENTS (("gdb: do_initial_child_stuff: %s\n",
++                 target_pid_to_str (pid_to_ptid (pid))));
++  
+   last_sig = TARGET_SIGNAL_0;
+   event_count = 0;
+   exception_count = 0;
+@@ -1591,6 +1683,7 @@
+ 
+   if (!ok)
+     {
++#ifdef __CYGWIN__
+       /* Try fall back to Cygwin pid */
+       pid = cygwin_internal (CW_CYGWIN_PID_TO_WINPID, pid);
+ 
+@@ -1598,6 +1691,7 @@
+ 	ok = DebugActiveProcess (pid);
+ 
+       if (!ok)
++#endif /* __CYGWIN__ */
+ 	error ("Can't attach to process.");
+     }
+ 
+@@ -1657,13 +1751,14 @@
+ char *
+ child_pid_to_exec_file (int pid)
+ {
++  static char path[MAX_PATH + 1];
++  char *path_ptr = NULL;
++#ifdef __CYGWIN__
+   /* Try to find the process path using the Cygwin internal process list
+      pid isn't a valid pid, unfortunately.  Use current_event.dwProcessId
+      instead.  */
+   /* TODO: Also find native Windows processes using CW_GETPINFO_FULL.  */
+ 
+-  static char path[MAX_PATH + 1];
+-  char *path_ptr = NULL;
+   int cpid;
+   struct external_pinfo *pinfo;
+ 
+@@ -1681,7 +1776,14 @@
+        }
+     }
+   cygwin_internal (CW_UNLOCK_PINFO);
+-  return path_ptr; 
++#else
++  if (!GetModuleFileNameEx (current_process_handle, NULL, path, MAX_PATH))
++    printf_unfiltered ("error reading the process's file name: %lu",
++                       GetLastError ());
++  else
++    path_ptr = path;
++#endif
++  return path_ptr;
+ }
+ 
+ /* Print status information about what we're accessing.  */
+@@ -1721,9 +1823,17 @@
+   char *toexec;
+   char shell[MAX_PATH + 1]; /* Path to shell */
+   const char *sh;
++#if defined (__MINGW32__)
++  /* BEGIN: Fragment of Al Stevens's patch for GDB on Win9x */
++  HANDLE hStdInput = 0;
++  HANDLE hStdOutput = 0;
++  HANDLE hStdError = 0;
++  /* END: Fragment of Al Stevens's patch for GDB on Win9x */
++#else /* !__MINGW32__ */
+   int tty;
+   int ostdin, ostdout, ostderr;
+-
++#endif /* !__MINGW32__ */
++  
+   if (!exec_file)
+     error ("No executable specified, use `target exec'.\n");
+ 
+@@ -1733,7 +1843,11 @@
+   if (!useshell)
+     {
+       flags = DEBUG_ONLY_THIS_PROCESS;
++#ifdef __CYGWIN__
+       cygwin_conv_to_win32_path (exec_file, real_path);
++#else
++      strcpy (real_path, exec_file);
++#endif
+       toexec = real_path;
+     }
+   else
+@@ -1742,7 +1856,11 @@
+       sh = getenv ("SHELL");
+       if (!sh)
+ 	sh = "/bin/sh";
++#ifdef __CYGWIN__
+       cygwin_conv_to_win32_path (sh, shell);
++#else
++      strcpy (shell, sh);
++#endif
+       newallargs = alloca (sizeof (" -c 'exec  '") + strlen (exec_file)
+ 			   + strlen (allargs) + 2);
+       sprintf (newallargs, " -c 'exec %s %s'", exec_file, allargs);
+@@ -1793,10 +1911,12 @@
+ 	    len = strlen (conv_path_names[j]);
+ 	    if (strncmp (conv_path_names[j], env[i], len) == 0)
+ 	      {
++#ifdef __CYGWIN__
+ 		if (cygwin_posix_path_list_p (env[i] + len))
+ 		  envlen += len
+ 		    + cygwin_posix_to_win32_path_list_buf_size (env[i] + len);
+ 		else
++#endif
+ 		  envlen += strlen (env[i]) + 1;
+ 		break;
+ 	      }
+@@ -1817,12 +1937,14 @@
+ 	    len = strlen (conv_path_names[j]);
+ 	    if (strncmp (conv_path_names[j], env[i], len) == 0)
+ 	      {
++#ifdef __CYGWIN__
+ 		if (cygwin_posix_path_list_p (env[i] + len))
+ 		  {
+ 		    memcpy (temp, env[i], len);
+ 		    cygwin_posix_to_win32_path_list (env[i] + len, temp + len);
+ 		  }
+ 		else
++#endif
+ 		  strcpy (temp, env[i]);
+ 		break;
+ 	      }
+@@ -1837,6 +1959,20 @@
+     *temp = 0;
+   }
+ 
++#if defined (__MINGW32__)
++  /* BEGIN: Fragment of Al Stevens's patch for GDB on Win9x */
++  if ( new_console)
++    {
++      hStdInput = GetStdHandle( STD_INPUT_HANDLE);
++      hStdOutput = GetStdHandle( STD_OUTPUT_HANDLE);
++      hStdError = GetStdHandle( STD_ERROR_HANDLE);
++
++      SetStdHandle( STD_INPUT_HANDLE, INVALID_HANDLE_VALUE);
++      SetStdHandle( STD_OUTPUT_HANDLE, INVALID_HANDLE_VALUE);
++      SetStdHandle( STD_ERROR_HANDLE, INVALID_HANDLE_VALUE);
++    }
++  /* END: Fragment of Al Stevens's patch for GDB on Win9x */
++#else /* !__MINGW32__ */
+   if (!inferior_io_terminal)
+     tty = ostdin = ostdout = ostderr = -1;
+   else
+@@ -1857,7 +1993,8 @@
+ 	  dup2 (tty, 2);
+ 	}
+     }
+-
++#endif /* !__MINGW32__ */
++  
+   ret = CreateProcess (0,
+ 		       args,	/* command line */
+ 		       NULL,	/* Security */
+@@ -1868,6 +2005,16 @@
+ 		       NULL,	/* current directory */
+ 		       &si,
+ 		       &pi);
++#if defined (__MINGW32__)
++  /* BEGIN: Fragment of Al Stevens's patch for GDB on Win9x */
++  if ( new_console)
++    {
++      SetStdHandle( STD_INPUT_HANDLE, hStdInput);
++      SetStdHandle( STD_OUTPUT_HANDLE, hStdOutput);
++      SetStdHandle( STD_ERROR_HANDLE, hStdError);
++    }
++  /* END: Fragment of Al Stevens's patch for GDB on Win9x */
++#else /* !__MINGW32__ */
+   if (tty >= 0)
+     {
+       close (tty);
+@@ -1878,7 +2025,7 @@
+       close (ostdout);
+       close (ostderr);
+     }
+-
++#endif /* !__MINGW32__ */
+   if (!ret)
+     error ("Error creating process %s, (error %d)\n", exec_file, (unsigned) GetLastError ());
+ 
+@@ -2035,6 +2182,10 @@
+ 	       FIXME: should we set dr6 also ?? */
+ 	      th->context.Dr7 = dr[7];
+ 	    }
++    
++    DEBUG_EVENTS (("gdb: child_resume.SetThreadContext: %s\n",
++                   target_pid_to_str (pid_to_ptid (th->id))));
++  
+ 	  CHECK (SetThreadContext (th->h, &th->context));
+ 	  th->context.ContextFlags = 0;
+ 	}
+@@ -2063,6 +2214,10 @@
+ {
+   DEBUG_EVENTS (("gdb: child_close, inferior_ptid=%d\n",
+ 		PIDGET (inferior_ptid)));
++  child_init_thread_list ();
++  disable_breakpoints_in_shlibs (1);
++  child_clear_solibs ();
++  clear_proceed_status ();
+ }
+ 
+ static void
+@@ -2095,7 +2250,7 @@
+   deprecated_child_ops.to_mourn_inferior = child_mourn_inferior;
+   deprecated_child_ops.to_can_run = child_can_run;
+   deprecated_child_ops.to_thread_alive = win32_child_thread_alive;
+-  deprecated_child_ops.to_pid_to_str = cygwin_pid_to_str;
++  deprecated_child_ops.to_pid_to_str = win32_pid_to_str;
+   deprecated_child_ops.to_stop = child_stop;
+   deprecated_child_ops.to_stratum = process_stratum;
+   deprecated_child_ops.to_has_all_memory = 1;
+@@ -2233,7 +2388,7 @@
+ 
+ /* Convert pid to printable format. */
+ char *
+-cygwin_pid_to_str (ptid_t ptid)
++win32_pid_to_str (ptid_t ptid)
+ {
+   static char buf[80];
+   int pid = PIDGET (ptid);
+diff -Nru3 --exclude configure gdb-6.3/readline/bind.c gdb-6.3-1/readline/bind.c
+--- gdb-6.3/readline/bind.c	Wed Jan 28 09:25:15 2004
++++ gdb-6.3-1/readline/bind.c	Wed Feb 16 20:17:48 2005
+@@ -48,6 +48,11 @@
+ extern int errno;
+ #endif /* !errno */
+ 
++#ifdef __MINGW32__
++#include <sys/stat.h>
++#include <io.h>
++#endif
++
+ #include "posixstat.h"
+ 
+ /* System-specific feature definitions and include files. */
+@@ -735,6 +740,19 @@
+   openname = tilde_expand (filename);
+   buffer = _rl_read_file (openname, &file_size);
+   free (openname);
++
++#if defined (__MINGW32__) && defined (INITFILES_IN_REGISTRY)
++  if (buffer == 0)
++    {
++      openname = _rl_get_user_registry_string(READLINE_REGKEY,
++                                              INPUTRC_REGVAL);
++      if (openname)
++        {
++          buffer = _rl_read_file (openname, &file_size);
++          free (openname);
++        }
++    }
++#endif	/* __MINGW32__ */
+ 
+   if (buffer == 0)
+     return (errno);
+diff -Nru3 --exclude configure gdb-6.3/readline/chardefs.h gdb-6.3-1/readline/chardefs.h
+--- gdb-6.3/readline/chardefs.h	Mon Dec  9 09:31:37 2002
++++ gdb-6.3-1/readline/chardefs.h	Wed Feb 16 20:17:48 2005
+@@ -53,10 +53,15 @@
+ /* Some character stuff. */
+ #define control_character_threshold 0x020   /* Smaller than this is control. */
+ #define control_character_mask 0x1f	    /* 0x20 - 1 */
+-#define meta_character_threshold 0x07f	    /* Larger than this is Meta. */
+ #define control_character_bit 0x40	    /* 0x000000, must be off. */
+-#define meta_character_bit 0x080	    /* x0000000, must be on. */
+-#define largest_char 255		    /* Largest character value. */
++
++/* Some character stuff. */
++#define control_character_threshold 0x020   /* Smaller than this is control. */
++#define control_character_mask 0x1f         /* 0x20 - 1 */
++#define meta_character_threshold 0x07f      /* Larger than this is Meta. */
++#define control_character_bit 0x40          /* 0x000000, must be off. */
++#define meta_character_bit 0x080            /* x0000000, must be on. */
++#define largest_char 255                    /* Largest character value. */
+ 
+ #define CTRL_CHAR(c) ((c) < control_character_threshold && (((c) & 0x80) == 0))
+ #define META_CHAR(c) ((c) > meta_character_threshold && (c) <= largest_char)
+diff -Nru3 --exclude configure gdb-6.3/readline/complete.c gdb-6.3-1/readline/complete.c
+--- gdb-6.3/readline/complete.c	Mon Dec  9 09:31:37 2002
++++ gdb-6.3-1/readline/complete.c	Wed Feb 16 20:17:48 2005
+@@ -43,12 +43,19 @@
+ 
+ #include <stdio.h>
+ 
++#ifdef __MINGW32__
++# include <windows.h>
++# include <io.h>
++#endif
++
+ #include <errno.h>
+ #if !defined (errno)
+ extern int errno;
+ #endif /* !errno */
+ 
++#ifndef __MINGW32__
+ #include <pwd.h>
++#endif
+ 
+ #include "posixdir.h"
+ #include "posixstat.h"
+@@ -1646,7 +1653,12 @@
+   return (char *)NULL;
+ #else /* !__WIN32__ && !__OPENNT) */
+   static char *username = (char *)NULL;
++#ifndef __MINGW32__
+   static struct passwd *entry;
++#else
++  char user_name[128];
++  unsigned user_len;
++#endif
+   static int namelen, first_char, first_char_loc;
+   char *value;
+ 
+@@ -1659,9 +1671,12 @@
+ 
+       username = savestring (&text[first_char_loc]);
+       namelen = strlen (username);
++#ifndef __MINGW32__
+       setpwent ();
++#endif
+     }
+ 
++#ifndef __MINGW32__
+   while (entry = getpwent ())
+     {
+       /* Null usernames should result in all users as possible completions. */
+@@ -1687,6 +1702,21 @@
+ 
+       return (value);
+     }
++#else /* __MINGW32__ */
++  if (GetUserName (user_name, &user_len))
++    {
++      if (namelen == 0 || (!strnicmp (username, user_name, name_len)))
++	{
++	  value = (char *)xmalloc (2 + strlen (user_name));
++	  *value = *text;
++	  strcpy (value + first_char_loc, user_name);
++	  if (first_char == '~')
++	    rl_filename_completion_desired = 1;
++	  return (value);
++	}
++    }
++  return ((char *)NULL);
++#endif /* __MINGW32__ */
+ #endif /* !__WIN32__ && !__OPENNT */
+ }
+ 
+@@ -1699,14 +1729,22 @@
+      const char *text;
+      int state;
+ {
++#ifdef __MINGW32__
++  static WIN32_FIND_DATA entry;
++  static HANDLE directory = NULL;
++  static BOOL found = 0;
++  char tmp[MAX_PATH];
++# define DIR void
++#else
++  struct dirent *entry;
+   static DIR *directory = (DIR *)NULL;
++#endif
+   static char *filename = (char *)NULL;
+   static char *dirname = (char *)NULL;
+   static char *users_dirname = (char *)NULL;
+   static int filename_len;
+   char *temp;
+   int dirlen;
+-  struct dirent *entry;
+ 
+   /* If we don't have any state, then do some initialization. */
+   if (state == 0)
+@@ -1775,7 +1813,18 @@
+ 	  users_dirname = savestring (dirname);
+ 	}
+ 
++#ifdef __MINGW32__
++      strcpy (tmp, dirname);
++      if (tmp[strlen (tmp) - 1] == '/')
++	strcat (tmp, "*");
++      else
++	strcat (tmp, "/*");
++	
++      directory = FindFirstFile (tmp, &entry);
++      found = 1;
++#else  
+       directory = opendir (dirname);
++#endif
+       filename_len = strlen (filename);
+ 
+       rl_filename_completion_desired = 1;
+@@ -1788,21 +1837,24 @@
+   /* *** UNIMPLEMENTED *** */
+ 
+   /* Now that we have some state, we can read the directory. */
+-
++#ifndef __MINGW32__
+   entry = (struct dirent *)NULL;
+   while (directory && (entry = readdir (directory)))
++#else
++  while (directory != INVALID_HANDLE_VALUE && directory && found)
++#endif
+     {
+       /* Special case for no filename.  If the user has disabled the
+          `match-hidden-files' variable, skip filenames beginning with `.'.
+ 	 All other entries except "." and ".." match. */
+       if (filename_len == 0)
+ 	{
+-	  if (_rl_match_hidden_files == 0 && HIDDEN_FILE (entry->d_name))
++	  if (_rl_match_hidden_files == 0 && HIDDEN_FILE (FILENAME (entry)))
+ 	    continue;
+ 
+-	  if (entry->d_name[0] != '.' ||
+-	       (entry->d_name[1] &&
+-		 (entry->d_name[1] != '.' || entry->d_name[2])))
++	  if (FILENAME (entry)[0] != '.' ||
++	       (FILENAME (entry)[1] &&
++		 (FILENAME (entry)[1] != '.' || FILENAME (entry)[2])))
+ 	    break;
+ 	}
+       else
+@@ -1811,22 +1863,29 @@
+ 	     it is a match. */
+ 	  if (_rl_completion_case_fold)
+ 	    {
+-	      if ((_rl_to_lower (entry->d_name[0]) == _rl_to_lower (filename[0])) &&
++	      if ((_rl_to_lower (FILENAME (entry)[0]) == _rl_to_lower (filename[0])) &&
+ 		  (((int)D_NAMLEN (entry)) >= filename_len) &&
+-		  (_rl_strnicmp (filename, entry->d_name, filename_len) == 0))
++		  (_rl_strnicmp (filename, FILENAME (entry), filename_len) == 0))
+ 		break;
+ 	    }
+ 	  else
+ 	    {
+-	      if ((entry->d_name[0] == filename[0]) &&
++	      if ((FILENAME (entry)[0] == filename[0]) &&
+ 		  (((int)D_NAMLEN (entry)) >= filename_len) &&
+-		  (strncmp (filename, entry->d_name, filename_len) == 0))
++		  (strncmp (filename, FILENAME (entry), filename_len) == 0))
+ 		break;
+ 	    }
+ 	}
++#ifdef __MINGW32__
++      found = FindNextFile (directory, &entry);
++#endif    
+     }
+ 
++#ifdef __MINGW32__
++  if (!found)
++#else
+   if (entry == 0)
++#endif
+     {
+       if (directory)
+ 	{
+@@ -1879,11 +1938,14 @@
+ 		temp[dirlen++] = '/';
+ 	    }
+ 
+-	  strcpy (temp + dirlen, entry->d_name);
++	  strcpy (temp + dirlen, FILENAME (entry));
+ 	}
+       else
+-	temp = savestring (entry->d_name);
++	temp = savestring (FILENAME (entry));
+ 
++#ifdef __MINGW32__
++      found = FindNextFile (directory, &entry);
++#endif
+       return (temp);
+     }
+ }
+diff -Nru3 --exclude configure gdb-6.3/readline/display.c gdb-6.3-1/readline/display.c
+--- gdb-6.3/readline/display.c	Tue Dec 30 18:25:18 2003
++++ gdb-6.3-1/readline/display.c	Wed Feb 16 20:17:48 2005
+@@ -59,6 +59,14 @@
+ #include "rlprivate.h"
+ #include "xmalloc.h"
+ 
++#if defined (__MINGW32__)
++#include <windows.h>
++extern int haveConsole;
++extern HANDLE hStdout, hStdin;
++extern COORD rlScreenEnd;
++extern int rlScreenMax;
++#endif /* __MINGW32__ */
++
+ #if !defined (strchr) && !defined (__STDC__)
+ extern char *strchr (), *strrchr ();
+ #endif /* !strchr && !__STDC__ */
+@@ -73,6 +81,11 @@
+ static void insert_some_chars PARAMS((char *, int, int));
+ static void cr PARAMS((void));
+ 
++#if defined (__MINGW32__)
++#define putc(ch, stream) \
++if ((ch) == '\r') cr (); else _rl_output_character_function (ch)
++#endif
++
+ #if defined (HANDLE_MULTIBYTE)
+ static int _rl_col_width PARAMS((const char *, int, int));
+ static int *_rl_wrapped_line;
+@@ -863,7 +876,7 @@
+ 	  if (cursor_linenum == 0 && wrap_offset > 0 && _rl_last_c_pos > 0 &&
+ 	      _rl_last_c_pos <= prompt_last_invisible && local_prompt)
+ 	    {
+-#if defined (__MSDOS__)
++#if defined (__MSDOS__) || defined (__MINGW32__)
+ 	      putc ('\r', rl_outstream);
+ #else
+ 	      if (_rl_term_cr)
+@@ -1259,7 +1272,7 @@
+       _rl_term_cr && lendiff > prompt_visible_length && _rl_last_c_pos > 0 &&
+       od >= lendiff && _rl_last_c_pos <= prompt_last_invisible)
+     {
+-#if defined (__MSDOS__)
++#if defined (__MSDOS__) || defined (__MINGW32__)
+       putc ('\r', rl_outstream);
+ #else
+       tputs (_rl_term_cr, 1, _rl_output_character_function);
+@@ -1310,6 +1323,7 @@
+ 
+   if (col_lendiff > 0)	/* XXX - was lendiff */
+     {
++#ifndef __MINGW32__
+       /* Non-zero if we're increasing the number of lines. */
+       int gl = current_line >= _rl_vis_botlin && inv_botlin > _rl_vis_botlin;
+       /* Sometimes it is cheaper to print the characters rather than
+@@ -1359,6 +1373,7 @@
+ 	    }
+ 	}
+       else
++#endif /* !__MINGW32__ */
+ 	{
+ 	  /* cannot insert chars, write to EOL */
+ 	  _rl_output_some_chars (nfd, temp);
+@@ -1367,6 +1382,7 @@
+     }
+   else				/* Delete characters from line. */
+     {
++#ifndef __MINGW32__
+       /* If possible and inexpensive to use terminal deletion, then do so. */
+       if (_rl_term_dc && (2 * col_temp) >= -col_lendiff)
+ 	{
+@@ -1390,6 +1406,7 @@
+ 	}
+       /* Otherwise, print over the existing material. */
+       else
++#endif /* !__MINGW32__ */
+ 	{
+ 	  if (temp > 0)
+ 	    {
+@@ -1508,6 +1525,16 @@
+      int new;
+      const char *data;
+ {
++#if defined (__MINGW32__)
++  CONSOLE_SCREEN_BUFFER_INFO	csbi;
++  if ( (_rl_last_c_pos != new)
++       && haveConsole && GetConsoleScreenBufferInfo(hStdout, &csbi) )
++    {
++      csbi.dwCursorPosition.X += new - _rl_last_c_pos;
++      if ( SetConsoleCursorPosition(hStdout, csbi.dwCursorPosition) )
++	_rl_last_c_pos = new;
++    }
++#else /* !__MINGW32__ */
+   register int i;
+ 
+   /* If we don't have to do anything, then return. */
+@@ -1534,7 +1561,7 @@
+   if (new == 0 || CR_FASTER (new, _rl_last_c_pos) ||
+       (_rl_term_autowrap && i == _rl_screenwidth))
+     {
+-#if defined (__MSDOS__)
++#if defined (__MSDOS__) || defined (__MINGW32__)
+       putc ('\r', rl_outstream);
+ #else
+       tputs (_rl_term_cr, 1, _rl_output_character_function);
+@@ -1614,6 +1641,7 @@
+     _rl_last_c_pos =  _rl_col_width (data, 0, new);
+   else
+     _rl_last_c_pos = new;
++#endif /* !_MINGW32__ */
+ }
+ 
+ /* PWP: move the cursor up or down. */
+@@ -1621,6 +1649,16 @@
+ _rl_move_vert (to)
+      int to;
+ {
++#if defined (__MINGW32__)
++  CONSOLE_SCREEN_BUFFER_INFO	csbi;
++  if ( (_rl_last_v_pos != to) && (to <= _rl_screenheight)
++       && haveConsole && GetConsoleScreenBufferInfo(hStdout, &csbi) )
++    {
++      csbi.dwCursorPosition.Y += to - _rl_last_v_pos;
++      if ( SetConsoleCursorPosition(hStdout, csbi.dwCursorPosition) )
++	_rl_last_v_pos = to;
++    }
++#else /* !__MINGW32__ */
+   register int delta, i;
+ 
+   if (_rl_last_v_pos == to || to > _rl_screenheight)
+@@ -1654,6 +1692,7 @@
+     }
+ 
+   _rl_last_v_pos = to;		/* Now TO is here */
++#endif /* __MINGW32__ */
+ }
+ 
+ /* Physically print C on rl_outstream.  This is for functions which know
+@@ -1864,6 +1903,23 @@
+ _rl_clear_to_eol (count)
+      int count;
+ {
++#if defined (__MINGW32__)
++  CONSOLE_SCREEN_BUFFER_INFO	csbi;
++  if (haveConsole && GetConsoleScreenBufferInfo(hStdout, &csbi))
++    {
++      DWORD written;
++      int linear_pos;
++      
++      linear_pos = (int)csbi.dwCursorPosition.Y * (int)csbi.dwSize.X
++	+ (int)csbi.dwCursorPosition.X;
++      if (linear_pos < rlScreenMax)
++	{
++	  rlScreenEnd = csbi.dwCursorPosition;
++	  rlScreenMax = linear_pos;
++	}
++      FillConsoleOutputCharacter(hStdout, ' ', count, csbi.dwCursorPosition, &written);
++    }
++#else /* !__MINGW32__ */
+ #ifndef __MSDOS__
+   if (_rl_term_clreol)
+     tputs (_rl_term_clreol, 1, _rl_output_character_function);
+@@ -1871,6 +1927,7 @@
+ #endif
+   if (count)
+     space_to_eol (count);
++#endif /* __MINGW32__ */
+ }
+ 
+ /* Clear to the end of the line using spaces.  COUNT is the minimum
+@@ -1879,12 +1936,16 @@
+ space_to_eol (count)
+      int count;
+ {
++#if defined (__MINGW32__)
++  _rl_clear_to_eol (count);
++#else
+   register int i;
+ 
+   for (i = 0; i < count; i++)
+    putc (' ', rl_outstream);
+ 
+   _rl_last_c_pos += count;
++#endif /* __MINGW32__ */
+ }
+ 
+ void
+@@ -1894,14 +1955,17 @@
+   ScreenClear ();	/* FIXME: only works in text modes */
+   ScreenSetCursor (0, 0);  /* term_clrpag is "cl" which homes the cursor */
+ #else
++#if !defined (__MINGW32__)
+   if (_rl_term_clrpag)
+     tputs (_rl_term_clrpag, 1, _rl_output_character_function);
+   else
++#endif /* !__MINGW32__ */
+     rl_crlf ();
+ #endif
+ }
+ 
+ /* Insert COUNT characters from STRING to the output stream at column COL. */
++#if !defined (__MINGW32__)
+ static void
+ insert_some_chars (string, count, col)
+      char *string;
+@@ -1974,6 +2038,7 @@
+     }
+ #endif /* !__MSDOS__ */
+ }
++#endif /* !__MINGW32__ */
+ 
+ void
+ _rl_update_final ()
+@@ -2010,6 +2075,9 @@
+ static void
+ cr ()
+ {
++#if defined (__MINGW32__)
++  _rl_move_cursor_relative (0, 0);
++#else
+   if (_rl_term_cr)
+     {
+ #if defined (__MSDOS__)
+@@ -2019,6 +2087,7 @@
+ #endif
+       _rl_last_c_pos = 0;
+     }
++#endif /* __MINGW32__ */
+ }
+ 
+ /* Redraw the last line of a multi-line prompt that may possibly contain
+@@ -2066,7 +2135,11 @@
+      the right thing happens if we have wrapped to a new screen line. */
+   if (_rl_term_cr)
+     {
+-#if defined (__MSDOS__)
++#if defined (__MINGW32__)
++      _rl_move_cursor_relative (0, 0);
++      space_to_eol (_rl_screenwidth);
++      _rl_move_cursor_relative (0, 0);
++#elif defined (__MSDOS__)
+       putc ('\r', rl_outstream);
+ #else
+       tputs (_rl_term_cr, 1, _rl_output_character_function);
+@@ -2075,7 +2148,7 @@
+ #if defined (__MSDOS__)
+       space_to_eol (_rl_screenwidth);
+       putc ('\r', rl_outstream);
+-#else
++#elif !defined (__MINGW32__)
+       if (_rl_term_clreol)
+ 	tputs (_rl_term_clreol, 1, _rl_output_character_function);
+       else
+diff -Nru3 --exclude configure gdb-6.3/readline/funmap.c gdb-6.3-1/readline/funmap.c
+--- gdb-6.3/readline/funmap.c	Mon Dec  9 09:31:37 2002
++++ gdb-6.3-1/readline/funmap.c	Wed Feb 16 20:17:48 2005
+@@ -111,7 +111,7 @@
+   { "non-incremental-forward-search-history-again", rl_noninc_forward_search_again },
+   { "non-incremental-reverse-search-history-again", rl_noninc_reverse_search_again },
+   { "overwrite-mode", rl_overwrite_mode },
+-#ifdef __CYGWIN__
++#if defined (__CYGWIN__) || defined (__MINGW32__)
+   { "paste-from-clipboard", rl_paste_from_clipboard },
+ #endif
+   { "possible-completions", rl_possible_completions },
+diff -Nru3 --exclude configure gdb-6.3/readline/histfile.c gdb-6.3-1/readline/histfile.c
+--- gdb-6.3/readline/histfile.c	Mon Dec  9 09:31:37 2002
++++ gdb-6.3-1/readline/histfile.c	Wed Feb 16 20:17:48 2005
+@@ -48,7 +48,7 @@
+ #  include <unistd.h>
+ #endif
+ 
+-#if defined (__EMX__) || defined (__CYGWIN__)
++#if defined (__EMX__) || defined (__CYGWIN__) || defined (__MINW32__)
+ #  undef HAVE_MMAP
+ #endif
+ 
+@@ -69,18 +69,22 @@
+ 
+ #endif /* HAVE_MMAP */
+ 
++#ifdef __MINGW32__
++#include <io.h>
++#endif
++
+ /* If we're compiling for __EMX__ (OS/2) or __CYGWIN__ (cygwin32 environment
+    on win 95/98/nt), we want to open files with O_BINARY mode so that there
+    is no \n -> \r\n conversion performed.  On other systems, we don't want to
+    mess around with O_BINARY at all, so we ensure that it's defined to 0. */
+-#if defined (__EMX__) || defined (__CYGWIN__)
++#if defined (__EMX__) || defined (__CYGWIN__) || defined (__MINGW32__)
+ #  ifndef O_BINARY
+ #    define O_BINARY 0
+ #  endif
+-#else /* !__EMX__ && !__CYGWIN__ */
++#else /* !__EMX__ && !__CYGWIN__ && !__MINGW32__ */
+ #  undef O_BINARY
+ #  define O_BINARY 0
+-#endif /* !__EMX__ && !__CYGWIN__ */
++#endif /* !__EMX__ && !__CYGWIN__ && !__MINGW32__ */
+ 
+ #include <errno.h>
+ #if !defined (errno)
+@@ -93,6 +97,10 @@
+ #include "rlshell.h"
+ #include "xmalloc.h"
+ 
++#ifdef __MINGW32__
++#include "rldefs.h"
++#endif
++
+ /* Return the string that should be used in the place of this
+    filename.  This only matters when you don't specify the
+    filename to read_history (), or write_history (). */
+@@ -113,6 +121,12 @@
+ 
+   if (home == 0)
+     {
++#if defined (__MINGW32__) && defined (INITFILES_IN_REGISTRY)
++      return_val = _rl_get_user_registry_string (READLINE_REGKEY, HISTFILE_REGVAL);
++      if (return_val)
++        return (return_val);
++      free (return_val);
++#endif	/* __MINGW32__ ... */
+       home = ".";
+       home_len = 1;
+     }
+diff -Nru3 --exclude configure gdb-6.3/readline/input.c gdb-6.3-1/readline/input.c
+--- gdb-6.3/readline/input.c	Mon Dec  9 09:31:37 2002
++++ gdb-6.3-1/readline/input.c	Wed Feb 16 20:17:48 2005
+@@ -154,6 +154,7 @@
+   return (0);
+ }
+ 
++#ifndef __MINGW32__
+ /* If a character is available to be read, then read it and stuff it into
+    IBUFFER.  Otherwise, just return.  Returns number of characters read
+    (0 if none available) and -1 on error (EIO). */
+@@ -235,6 +236,7 @@
+ 
+   return 1;
+ }
++#endif /* !__MINGW32__ */
+ 
+ int
+ rl_set_keyboard_input_timeout (u)
+@@ -248,6 +250,7 @@
+   return (o);
+ }
+ 
++#ifndef __MINGW32__
+ /* Is there input available to be read on the readline input file
+    descriptor?  Only works if the system has select(2) or FIONREAD.
+    Uses the value of _keyboard_input_timeout as the timeout; if another
+@@ -287,6 +290,7 @@
+ 
+   return 0;
+ }
++#endif /* !__MINGW32__ */
+ 
+ int
+ _rl_input_queued (t)
+@@ -415,6 +419,7 @@
+   return (c);
+ }
+ 
++#ifndef __MINGW32__
+ int
+ rl_getc (stream)
+      FILE *stream;
+@@ -468,6 +473,222 @@
+ 	return (EOF);
+     }
+ }
++
++#else /* __MINGW32__ */
++
++#include <windows.h>
++#include <ctype.h>
++#include <conio.h>
++#include <io.h>
++
++#define EXT_PREFIX 0x1f8
++
++#define KEV	   irec.Event.KeyEvent			/* to make life easier  */
++#define KST	   irec.Event.KeyEvent.dwControlKeyState
++
++static int pending_key = 0;
++static int pending_count = 0;
++static int pending_prefix = 0;
++
++extern int _rl_last_c_pos;	/* imported from display.c  */
++extern int _rl_last_v_pos;
++extern int rl_dispatching;	/* imported from readline.c  */
++extern int rl_point;
++extern int rl_done;
++extern int rl_visible_prompt_length;
++extern int _rl_screenwidth;		/* imported from terminal.c  */
++
++extern int haveConsole;		/* imported from rltty.c  */
++extern HANDLE hStdout, hStdin;
++extern COORD rlScreenOrigin, rlScreenEnd;
++extern int rlScreenStart, rlScreenMax;
++static void MouseEventProc(MOUSE_EVENT_RECORD kev);
++
++int rl_getc (stream)
++     FILE *stream;
++{
++  if ( pending_count )
++    {
++      --pending_count;
++      if ( pending_prefix && (pending_count & 1) )
++        return pending_prefix;
++      else
++        return pending_key;
++    }
++
++  while ( 1 )
++    {
++      DWORD dummy;
++
++      if (WaitForSingleObject(hStdin, WAIT_FOR_INPUT) != WAIT_OBJECT_0)
++        {
++          if ( rl_done )
++            return( 0 );
++          else
++            continue;
++        }
++      if ( haveConsole & FOR_INPUT )
++        {
++          INPUT_RECORD irec;
++          ReadConsoleInput (hStdin, &irec, 1, &dummy);
++          switch(irec.EventType)
++            {
++            case KEY_EVENT:
++              if (KEV.bKeyDown &&
++                  ((KEV.wVirtualKeyCode < VK_SHIFT) ||
++                   (KEV.wVirtualKeyCode > VK_MENU)))
++                {
++                  pending_count = KEV.wRepeatCount;
++                  pending_prefix = 0;
++                  pending_key = KEV.uChar.AsciiChar & 0xff;
++
++                  if (KST & ENHANCED_KEY)
++                    {
++#define CTRL_TO_ASCII(c) ((c) - 'a' + 1)
++                      switch (KEV.wVirtualKeyCode)
++                        {
++                          case VK_HOME:
++                            pending_key = CTRL_TO_ASCII ('a');
++                            break;
++                          case VK_END:
++                            pending_key = CTRL_TO_ASCII ('e');
++                            break;
++                          case VK_LEFT:
++                            pending_key = CTRL_TO_ASCII ('b');
++                            break;
++                          case VK_RIGHT:
++                            pending_key = CTRL_TO_ASCII ('f');
++                            break;
++                          case VK_UP:
++                            pending_key = CTRL_TO_ASCII ('p');
++                            break;
++                          case VK_DOWN:
++                            pending_key = CTRL_TO_ASCII ('n');
++                            break;
++                          case VK_DELETE:
++                            pending_key = CTRL_TO_ASCII ('d');
++                            break;
++                        }
++                    }
++                  
++                  if (KST & (LEFT_ALT_PRESSED | RIGHT_ALT_PRESSED))
++                    pending_prefix = VK_ESCAPE;
++
++                  if (pending_prefix)
++                      pending_count = (pending_count << 1) - 1;
++               
++                  /* Ascii direct */
++                  if (pending_key)
++                      pending_count--;
++
++                  if (pending_prefix)
++                    return pending_prefix;
++                  return pending_key;
++                }
++              break;
++            case MOUSE_EVENT:
++              if ( (haveConsole & FOR_OUTPUT) && !rl_dispatching )
++                MouseEventProc(irec.Event.MouseEvent);
++            default:
++              break;
++            }
++        }
++      else
++        {
++          int key;
++          ReadFile(hStdin, &key, 1, &dummy, NULL);
++          return key;
++        }
++    }
++}
++
++void MouseEventProc(MOUSE_EVENT_RECORD mev)
++{
++  static DWORD lastButtonState, cstat_flags;
++  static COORD lastButtonPos, src_down_pos;
++
++#define RLPOS_CHANGED	1
++#define SELECT_START	2
++  
++  switch (mev.dwEventFlags )
++    {
++    case 0 :			/* change in button state  */
++
++      /* Cursor setting: 
++	 LEFT_BUTTON_PRESSED sets cursor anywhere on the screen,
++	 thereafter, any change in button state will clipp the cursor
++	 position to the readline range if there has been no cursor
++	 movement. Otherwhise the cursor is reset to its old position.
++      */
++      if (mev.dwButtonState == FROM_LEFT_1ST_BUTTON_PRESSED)
++        {
++          if (lastButtonState == 0)
++            {
++              src_down_pos = mev.dwMousePosition;
++              cstat_flags |= RLPOS_CHANGED | SELECT_START;
++              SetConsoleCursorPosition(hStdout, mev.dwMousePosition);
++            }
++        }
++      else
++        {
++          if (cstat_flags & RLPOS_CHANGED)
++            {
++              if ( (mev.dwMousePosition.X == src_down_pos.X)
++		   && (mev.dwMousePosition.Y == src_down_pos.Y) )
++                {
++                  int linear_pos = (int)mev.dwMousePosition.Y * _rl_screenwidth
++		    + (int)mev.dwMousePosition.X;
++                  if (linear_pos < rlScreenStart + rl_visible_prompt_length)
++                    {
++                      linear_pos = rlScreenStart + rl_visible_prompt_length;
++                      mev.dwMousePosition.X = rlScreenOrigin.X + rl_visible_prompt_length;
++                      mev.dwMousePosition.Y = rlScreenOrigin.Y;
++                    }
++                  if (linear_pos > rlScreenMax)
++                    {
++                      linear_pos = rlScreenMax;
++                      mev.dwMousePosition = rlScreenEnd;
++                    }
++                  rl_point = linear_pos - rlScreenStart - rl_visible_prompt_length;
++                  _rl_last_c_pos = mev.dwMousePosition.X - rlScreenOrigin.X;
++                  _rl_last_v_pos = mev.dwMousePosition.Y - rlScreenOrigin.Y;
++                }
++              else
++                {
++                  mev.dwMousePosition.X = rlScreenOrigin.X + _rl_last_c_pos;
++                  mev.dwMousePosition.Y = rlScreenOrigin.Y + _rl_last_v_pos;
++                }
++              SetConsoleCursorPosition(hStdout, mev.dwMousePosition);
++              cstat_flags &= !RLPOS_CHANGED;
++            }
++        }
++      lastButtonState = mev.dwButtonState;
++      lastButtonPos = mev.dwMousePosition;
++      break;
++    case MOUSE_MOVED:		/* the most frequent event */
++    default:      
++      break;
++    }
++}
++
++int _rl_input_available ()
++{
++  if (isatty (fileno (rl_instream)))
++    return (kbhit());
++  return 0;
++}
++
++static int rl_gather_tyi ()
++{
++  int count = 0;
++  while (isatty (fileno (rl_instream)) && kbhit () && ibuffer_space ())
++    {
++      rl_stuff_char ((*rl_getc_function) (rl_instream));
++      count++;
++    }
++  return count;
++}
++#endif /* __MINGW32__ */
+ 
+ #if defined (HANDLE_MULTIBYTE)
+ /* read multibyte char */
+diff -Nru3 --exclude configure gdb-6.3/readline/kill.c gdb-6.3-1/readline/kill.c
+--- gdb-6.3/readline/kill.c	Mon Dec  9 09:31:37 2002
++++ gdb-6.3-1/readline/kill.c	Wed Feb 16 20:17:48 2005
+@@ -615,7 +615,7 @@
+ }
+ 
+ /* A special paste command for users of Cygnus's cygwin32. */
+-#if defined (__CYGWIN__)
++#if defined (__CYGWIN__) || defined (__MINGW32__)
+ #include <windows.h>
+ 
+ int
+diff -Nru3 --exclude configure gdb-6.3/readline/nls.c gdb-6.3-1/readline/nls.c
+--- gdb-6.3/readline/nls.c	Mon Dec  9 09:31:37 2002
++++ gdb-6.3-1/readline/nls.c	Wed Feb 16 20:17:48 2005
+@@ -82,12 +82,13 @@
+ _rl_init_eightbit ()
+ {
+ /* If we have setlocale(3), just check the current LC_CTYPE category
+-   value, and go into eight-bit mode if it's not C or POSIX. */
++   value, and go into eight-bit mode if it's not C or POSIX or MinGW. */
+ #if defined (HAVE_SETLOCALE)
+   char *t;
+ 
+   /* Set the LC_CTYPE locale category from environment variables. */
+   t = setlocale (LC_CTYPE, "");
++#if !defined (__MINGW32__)
+   if (t && *t && (t[0] != 'C' || t[1]) && (STREQ (t, "POSIX") == 0))
+     {
+       _rl_meta_flag = 1;
+@@ -96,6 +97,7 @@
+       return (1);
+     }
+   else
++#endif
+     return (0);
+ 
+ #else /* !HAVE_SETLOCALE */
+diff -Nru3 --exclude configure gdb-6.3/readline/parens.c gdb-6.3-1/readline/parens.c
+--- gdb-6.3/readline/parens.c	Mon Dec  9 09:31:37 2002
++++ gdb-6.3-1/readline/parens.c	Wed Feb 16 20:17:48 2005
+@@ -38,6 +38,10 @@
+ #  define HAVE_SELECT
+ #endif
+ 
++#ifdef __MINGW32__
++# include <windows.h>
++#endif
++
+ #if defined (HAVE_SELECT)
+ #  include <sys/time.h>
+ #endif /* HAVE_SELECT */
+@@ -62,7 +66,7 @@
+ 
+ /* Non-zero means try to blink the matching open parenthesis when the
+    close parenthesis is inserted. */
+-#if defined (HAVE_SELECT)
++#if defined (HAVE_SELECT) || defined (__MINGW32__)
+ int rl_blink_matching_paren = 1;
+ #else /* !HAVE_SELECT */
+ int rl_blink_matching_paren = 0;
+@@ -134,8 +138,25 @@
+       (*rl_redisplay_function) ();
+       ready = select (1, &readfds, (fd_set *)NULL, (fd_set *)NULL, &timer);
+       rl_point = orig_point;
+-#else /* !HAVE_SELECT */
+-      _rl_insert_char (count, invoking_key);
++#elif defined (__MINGW32__)
++      int orig_point, match_point, ready;
++
++      rl_insert (1, invoking_key);
++      (*rl_redisplay_function) ();
++      match_point =
++	find_matching_open (rl_line_buffer, rl_point - 2, invoking_key);
++
++      /* Emacs might message or ring the bell here, but I don't. */
++      if (match_point < 0)
++	return -1;
++
++      orig_point = rl_point;
++      rl_point = match_point;
++      (*rl_redisplay_function) ();
++      ready = (WaitForSingleObject (GetStdHandle(STD_INPUT_HANDLE), 500) == WAIT_OBJECT_0);
++      rl_point = orig_point;
++#else /* !__MINGW32__ */
++      rl_insert (count, invoking_key);
+ #endif /* !HAVE_SELECT */
+     }
+   return 0;
+diff -Nru3 --exclude configure gdb-6.3/readline/posixdir.h gdb-6.3-1/readline/posixdir.h
+--- gdb-6.3/readline/posixdir.h	Mon Dec  9 09:31:37 2002
++++ gdb-6.3-1/readline/posixdir.h	Wed Feb 16 20:17:48 2005
+@@ -26,6 +26,7 @@
+ #if defined (HAVE_DIRENT_H)
+ #  include <dirent.h>
+ #  define D_NAMLEN(d)   (strlen ((d)->d_name))
++#  define FILENAME(d)   ((d)->d_name)
+ #else
+ #  if defined (HAVE_SYS_NDIR_H)
+ #    include <sys/ndir.h>
+@@ -40,7 +41,16 @@
+ #    define dirent direct
+ #  endif /* !dirent */
+ #  define D_NAMLEN(d)   ((d)->d_namlen)
++#  define FILENAME(d)   ((d)->d_name)
+ #endif /* !HAVE_DIRENT_H */
++
++#if defined (__MINGW32__)
++# undef FILENAME
++# define FILENAME(d) (d).cFileName
++# define closedir(dir) FindClose (dir)
++# undef D_NAMLEN
++# define D_NAMLEN(d) strlen (d.cFileName)
++#endif
+ 
+ #if defined (STRUCT_DIRENT_HAS_D_INO) && !defined (STRUCT_DIRENT_HAS_D_FILENO)
+ #  define d_fileno d_ino
+diff -Nru3 --exclude configure gdb-6.3/readline/readline.c gdb-6.3-1/readline/readline.c
+--- gdb-6.3/readline/readline.c	Wed Jan 28 09:25:15 2004
++++ gdb-6.3-1/readline/readline.c	Wed Feb 16 20:17:48 2005
+@@ -829,8 +829,10 @@
+      inputrc file. */
+   rl_set_keymap_from_edit_mode ();
+ 
++#if defined (__MINGW32__)
+   /* Try to bind a common arrow key prefix, if not already bound. */
+   bind_arrow_keys ();
++#endif
+ 
+   /* Enable the meta key, if this terminal has one. */
+   if (_rl_enable_meta)
+@@ -851,6 +853,7 @@
+   rl_tty_set_default_bindings (_rl_keymap);
+ }
+ 
++#if defined (__MINGW32__)
+ /* Bind some common arrow key sequences in MAP. */
+ static void
+ bind_arrow_keys_internal (map)
+@@ -898,6 +901,7 @@
+   bind_arrow_keys_internal (vi_insertion_keymap);
+ #endif
+ }
++#endif /* !__MINGW32__ */
+ 
+ /* **************************************************************** */
+ /*								    */
+diff -Nru3 --exclude configure gdb-6.3/readline/readline.h gdb-6.3-1/readline/readline.h
+--- gdb-6.3/readline/readline.h	Mon Dec  9 09:31:37 2002
++++ gdb-6.3-1/readline/readline.h	Wed Feb 16 20:17:48 2005
+@@ -169,8 +169,8 @@
+ extern int rl_yank_pop PARAMS((int, int));
+ extern int rl_yank_nth_arg PARAMS((int, int));
+ extern int rl_yank_last_arg PARAMS((int, int));
+-/* Not available unless __CYGWIN__ is defined. */
+-#ifdef __CYGWIN__
++/* Not available unless __CYGWIN__ or __MINGW32__ is defined. */
++#if defined (__CYGWIN__) || defined (__MINGW32__)
+ extern int rl_paste_from_clipboard PARAMS((int, int));
+ #endif
+ 
+diff -Nru3 --exclude configure gdb-6.3/readline/rldefs.h gdb-6.3-1/readline/rldefs.h
+--- gdb-6.3/readline/rldefs.h	Mon Dec  9 09:31:37 2002
++++ gdb-6.3-1/readline/rldefs.h	Wed Feb 16 20:17:48 2005
+@@ -72,6 +72,9 @@
+ #if defined (HAVE_STRCASECMP)
+ #define _rl_stricmp strcasecmp
+ #define _rl_strnicmp strncasecmp
++#elif defined (__MINGW32__)
++#define _rl_stricmp stricmp
++#define _rl_strnicmp strnicmp
+ #else
+ extern int _rl_stricmp PARAMS((char *, char *));
+ extern int _rl_strnicmp PARAMS((char *, char *, int));
+@@ -150,6 +153,30 @@
+ #  define SWAP(s, e)  do { int t; t = s; s = e; e = t; } while (0)
+ #endif
+ 
++#if defined (__MINGW32__)
++#define WAIT_FOR_INPUT 200	/* milliseconds to suspend maximally 
++ 				   when waiting for input */
++#define FOR_INPUT	1	/* flags for open state of the console  */
++#define FOR_OUTPUT	2
++#define INITIALIZED	4
++
++/* undefine this when readline / history should not look into the registry
++   for the path to their init files  */
++#define INITFILES_IN_REGISTRY 1
++ 
++#if defined (INITFILES_IN_REGISTRY)
++/* We also try to get the .inputrc and .history file paths from the registry,
++   define what to look for */
++#define READLINE_REGKEY	"Software\\Free Software Foundation\\libreadline"
++#define INPUTRC_REGVAL	"inputrc-file"
++#define HISTFILE_REGVAL	"history-file"
++
++extern char *_rl_get_user_registry_string (char *keyName, char* valName);
++
++#endif
++ 
++#endif	/* __MINGW32__  */
++ 
+ /* CONFIGURATION SECTION */
+ #include "rlconf.h"
+ 
+diff -Nru3 --exclude configure gdb-6.3/readline/rltty.c gdb-6.3-1/readline/rltty.c
+--- gdb-6.3/readline/rltty.c	Mon Dec  9 09:31:37 2002
++++ gdb-6.3-1/readline/rltty.c	Wed Feb 16 20:17:48 2005
+@@ -26,6 +26,9 @@
+ #  include <config.h>
+ #endif
+ 
++/* for native Win32 environments this is hard stuff  */
++#if !defined (__MINGW32__)
++
+ #include <sys/types.h>
+ #include <signal.h>
+ #include <errno.h>
+@@ -42,6 +45,12 @@
+ #endif /* GWINSZ_IN_SYS_IOCTL */
+ 
+ #include "rltty.h"
++
++#else	/* __MINGW32__ */
++#include "rldefs.h"
++#include <stdio.h>
++#endif	/* __MINGW32__ */
++
+ #include "readline.h"
+ #include "rlprivate.h"
+ 
+@@ -57,6 +66,7 @@
+ 
+ static void set_winsize PARAMS((int));
+ 
++#if !defined (__MINGW32__)
+ /* **************************************************************** */
+ /*								    */
+ /*			   Signal Management			    */
+@@ -845,6 +855,115 @@
+     }
+ #endif /* !NEW_TTY_DRIVER */
+ }
++
++#else /* __MING32__ */
++
++/* **************************************************************** */
++/*								    */
++/*		Default Key Bindings for Win32 Console              */
++/*								    */
++/* **************************************************************** */
++
++#include <windows.h>
++
++#define CONSOLE_MODE	ENABLE_PROCESSED_INPUT | ENABLE_MOUSE_INPUT
++
++/* global vars used by other modules */
++
++int	haveConsole	= 0;	/* remember init result of the console  */
++HANDLE	hStdout, hStdin;	/* these are different from stdin, stdout  */
++
++COORD	rlScreenOrigin;		/* readline origin in frame buffer coordinates */
++int	rlScreenStart = 0;	/* readline origin as frame screen buffer offset */
++COORD	rlScreenEnd;		/* end of line in frame buffer coordinates */
++int	rlScreenMax = 0;	/* end of line as linear frame buffer offset */
++
++static DWORD savedConsoleMode = 0;	/* to restore console on exit */
++
++void
++rltty_set_default_bindings (kmap)
++     Keymap kmap;
++{
++  /* I bet this is required on Win32 ;-) */
++  {
++    char buf[40]; strcpy(buf,"set bell-style none");
++    rl_parse_and_bind(buf);
++  }
++  rl_set_key ("\\M-\\ø&", rl_get_previous_history, kmap);
++  rl_set_key ("\\M-\\ø(", rl_get_next_history, kmap);
++  rl_set_key ("\\M-\\ø'", rl_forward, kmap);
++  rl_set_key ("\\M-\\ø%", rl_backward, kmap);
++  
++  rl_set_key ("\\M-\\ø$", rl_beg_of_line, kmap);
++  rl_set_key ("\\M-\\ø#", rl_end_of_line, kmap);
++  rl_set_key ("\\M-\\ú%", rl_backward_word, kmap);
++  rl_set_key ("\\M-\\ú'", rl_forward_word, kmap);
++  
++  rl_set_key ("\\M-\\ù-", rl_paste_from_clipboard, kmap);
++  rl_set_key ("\\M-\\ø.", rl_delete, kmap);
++  rl_set_key ("", rl_unix_word_rubout, kmap);
++}
++
++/* Query and set up a Window Console */
++
++void
++rl_prep_terminal (meta_flag)
++     int meta_flag;
++{
++  readline_echoing_p = 1;
++  
++  if ( !(haveConsole & INITIALIZED) )
++    {
++      if ( !(haveConsole & FOR_INPUT)
++	   && ((hStdin = GetStdHandle(STD_INPUT_HANDLE)) != INVALID_HANDLE_VALUE) )
++        {
++          DWORD dummy;
++          INPUT_RECORD irec;
++          if ( PeekConsoleInput(hStdin, &irec, 1, &dummy) )
++            {
++              haveConsole |= FOR_INPUT;
++              if ( GetConsoleMode(hStdin, &savedConsoleMode) )
++                SetConsoleMode(hStdin, CONSOLE_MODE);
++            }
++        }
++      if ( (hStdout = GetStdHandle(STD_OUTPUT_HANDLE)) != INVALID_HANDLE_VALUE)
++        {
++          CONSOLE_SCREEN_BUFFER_INFO csbi;
++          if ( GetConsoleScreenBufferInfo(hStdout, &csbi) 
++               && (csbi.dwSize.X > 0) && (csbi.dwSize.Y > 0) )
++            {
++              haveConsole |= FOR_OUTPUT;
++              rlScreenOrigin = csbi.dwCursorPosition;
++              rlScreenStart = (int)csbi.dwCursorPosition.Y * (int)csbi.dwSize.X
++		+ (int)csbi.dwCursorPosition.X;
++            }
++        }
++      haveConsole |= INITIALIZED;
++    }
++}
++
++/* Restore the consoles's normal settings and modes. */
++void
++rl_deprep_terminal ()
++{
++  SetConsoleMode(hStdin, savedConsoleMode);
++  haveConsole = 0;
++}
++
++int
++rl_restart_output (count, key)
++     int count, key;
++{
++  return 0;
++}
++
++int
++rl_stop_output (count, key)
++     int count, key;
++{
++  return 0;
++}
++#endif /* __MINGW32__ */
+ 
+ /* New public way to set the system default editing chars to their readline
+    equivalents. */
+diff -Nru3 --exclude configure gdb-6.3/readline/rltty.h gdb-6.3-1/readline/rltty.h
+--- gdb-6.3/readline/rltty.h	Mon Jul 10 03:19:56 2000
++++ gdb-6.3-1/readline/rltty.h	Wed Feb 16 20:17:48 2005
+@@ -38,7 +38,7 @@
+ #endif /* TERMIO_TTY_DRIVER */
+ 
+ /* Other (BSD) machines use sgtty. */
+-#if defined (NEW_TTY_DRIVER)
++#if defined (NEW_TTY_DRIVER) && !defined (__MINGW32__)
+ #  include <sgtty.h>
+ #endif
+ 
+diff -Nru3 --exclude configure gdb-6.3/readline/shell.c gdb-6.3-1/readline/shell.c
+--- gdb-6.3/readline/shell.c	Mon Dec  9 09:31:37 2002
++++ gdb-6.3-1/readline/shell.c	Wed Feb 16 20:17:48 2005
+@@ -50,7 +50,11 @@
+ #endif
+ 
+ #include <fcntl.h>
++#if !defined (__MINGW32__)
+ #include <pwd.h>
++#else /* __MINGW32__ */
++#include <windows.h>
++#endif /* __MINGW32__ */
+ 
+ #include <stdio.h>
+ 
+@@ -153,12 +157,16 @@
+ sh_get_home_dir ()
+ {
+   char *home_dir;
++#if !defined (__MINGW32__)
+   struct passwd *entry;
+ 
+   home_dir = (char *)NULL;
+   entry = getpwuid (getuid ());
+   if (entry)
+     home_dir = entry->pw_dir;
++#else
++  home_dir = sh_get_env_value ("HOME");
++#endif /* !__MINGW32__ */
+   return (home_dir);
+ }
+ 
+@@ -168,6 +176,7 @@
+ #  endif
+ #endif
+ 
++#if !defined (__MINGW32__)
+ int
+ sh_unset_nodelay_mode (fd)
+      int fd;
+@@ -195,3 +204,30 @@
+ 
+   return 0;
+ }
++
++#else	/* !__MINGW32__  */
++
++char *
++_rl_get_user_registry_string (char *keyName, char* valName)
++{
++  char *result = NULL;
++  HKEY	subKey;
++  if ( keyName && (RegOpenKeyEx(HKEY_CURRENT_USER, keyName, 0, KEY_READ, &subKey)
++                   == ERROR_SUCCESS) )
++    {
++      DWORD type;
++      char *chtry = NULL;
++      DWORD bufSize = 0;
++      
++      if ( (RegQueryValueExA(subKey, valName, NULL, &type, chtry, &bufSize)
++	    == ERROR_SUCCESS) && (type == REG_SZ) )
++        {
++	  if ( (chtry = (char *)xmalloc(bufSize))
++	       && (RegQueryValueExA(subKey, valName, NULL, &type, chtry, &bufSize) 
++		   == ERROR_SUCCESS) )
++	    result = chtry;
++        }
++    }
++  return result;
++}
++#endif	/* !__MINGW32__  */
+diff -Nru3 --exclude configure gdb-6.3/readline/signals.c gdb-6.3-1/readline/signals.c
+--- gdb-6.3/readline/signals.c	Mon Dec  9 09:31:37 2002
++++ gdb-6.3-1/readline/signals.c	Wed Feb 16 20:17:48 2005
+@@ -73,8 +73,10 @@
+ #  define sigemptyset(m)
+ #endif /* !HAVE_POSIX_SIGNALS */
+ 
++#if !defined (__MINGW32__)
+ static SigHandler *rl_set_sighandler PARAMS((int, SigHandler *, sighandler_cxt *));
+ static void rl_maybe_set_sighandler PARAMS((int, SigHandler *, sighandler_cxt *));
++#endif
+ 
+ /* Exported variables for use by applications. */
+ 
+@@ -92,6 +94,7 @@
+ static int sigwinch_set_flag;
+ #endif
+ 
++#if !defined (__MINGW32__)
+ /* **************************************************************** */
+ /*					        		    */
+ /*			   Signal Handling                          */
+@@ -357,6 +360,7 @@
+ 
+   return 0;
+ }
++#endif /* !__MINGW32__ */
+ 
+ /* Clean up the terminal and readline state after catching a signal, before
+    resending it to the calling application. */
+@@ -397,4 +401,50 @@
+   _rl_init_argument ();
+ }
+ 
++#if defined (__MINGW32__)
++
++#include <windows.h>
++#include <signal.h>
++#include <stdio.h>
++
++/* Handling of CTRL_C_EVENT, CTRL_CLOSE_EVENT, CTRL_BREAK_EVENT, 
++ * CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT,
++ * WINDOW_BUFFER_SIZE_EVENTs are handled separately see input.c
++ */
++
++BOOL CtrlEventHandler(DWORD dwEventType)
++{
++  if (dwEventType == CTRL_C_EVENT)
++    rl_free_line_state ();
++  rl_cleanup_after_signal ();
++  if (dwEventType == CTRL_C_EVENT)	/* special treatment */
++    {
++      if (rl_catch_signals == 1)	/* > 1: handled only locally */
++	{
++	  raise(SIGINT);		/* pass to program signal hadler */
++	  rl_reset_after_signal();	/* on return goon */
++	}
++      return TRUE;			/* don't pass to upstream handlers */
++    }
++  return FALSE; 			/* pass other events to handler chain */
++}
++
++int
++rl_set_signals ()
++{
++  if (rl_catch_signals && signals_set_flag == 0)
++    signals_set_flag = SetConsoleCtrlHandler( (PHANDLER_ROUTINE) CtrlEventHandler, TRUE);
++  return signals_set_flag;
++}
++
++int
++rl_clear_signals ()
++{
++  if ( signals_set_flag )
++    if ( SetConsoleCtrlHandler( (PHANDLER_ROUTINE) CtrlEventHandler, FALSE) )
++      signals_set_flag = 0;
++  return signals_set_flag;
++}
++
++#endif	/* __MINGW32__  */
+ #endif  /* HANDLE_SIGNALS */
+diff -Nru3 --exclude configure gdb-6.3/readline/terminal.c gdb-6.3-1/readline/terminal.c
+--- gdb-6.3/readline/terminal.c	Tue Dec 30 18:25:18 2003
++++ gdb-6.3-1/readline/terminal.c	Wed Feb 16 20:17:48 2005
+@@ -51,9 +51,17 @@
+ /* System-specific feature definitions and include files. */
+ #include "rldefs.h"
+ 
++#if defined (__MINGW32__)
++# include <windows.h>
++extern int haveConsole;	/* imported from rltty.c  */
++extern HANDLE hStdout, hStdin;
++extern COORD	rlScreenEnd;
++extern int	rlScreenMax;
++#else /* !__MINGW32__ */
+ #if defined (GWINSZ_IN_SYS_IOCTL) && !defined (TIOCGWINSZ)
+ #  include <sys/ioctl.h>
+ #endif /* GWINSZ_IN_SYS_IOCTL && !TIOCGWINSZ */
++#endif /* !__MINGW32__ */
+ 
+ #ifdef __MSDOS__
+ # include <pc.h>
+@@ -79,13 +87,13 @@
+ /*								    */
+ /* **************************************************************** */
+ 
+-#ifndef __MSDOS__
++#if !defined (__MSDOS__) && !defined (__MINGW32__)
+ static char *term_buffer = (char *)NULL;
+ static char *term_string_buffer = (char *)NULL;
+ 
+ /* Non-zero means this terminal can't really do anything. */
+ static int dumb_term;
+-#endif /* !__MSDOS__ */
++#endif /* !__MSDOS__ && !__MINGW32__ */
+ 
+ static int tcap_initialized;
+ 
+@@ -192,6 +200,7 @@
+    to the terminal.  If IGNORE_ENV is true, we do not pay attention to the
+    values of $LINES and $COLUMNS.  The tests for TERM_STRING_BUFFER being
+    non-null serve to check whether or not we have initialized termcap. */
++#if !defined (__MINGW32__)
+ void
+ _rl_get_screen_size (tty, ignore_env)
+      int tty, ignore_env;
+@@ -263,6 +272,29 @@
+   _rl_screenchars = _rl_screenwidth * _rl_screenheight;
+ }
+ 
++#else	/* __MINGW32__*/
++
++void
++_rl_get_screen_size (tty, ignore_env)
++     int tty, ignore_env;
++{
++  CONSOLE_SCREEN_BUFFER_INFO	csbi;
++  
++  if ( (haveConsole & FOR_OUTPUT) &&
++       GetConsoleScreenBufferInfo(hStdout, &csbi) )
++    {
++      _rl_screenwidth = csbi.dwSize.X;
++      _rl_screenheight = csbi.dwSize.Y;
++    }
++  else
++    {
++      _rl_screenwidth = 80;
++      _rl_screenheight = 24;
++    }
++  _rl_screenchars = _rl_screenwidth * _rl_screenheight;
++}
++#endif	/* __MINGW32__  */
++
+ void
+ _rl_set_screen_size (rows, cols)
+      int rows, cols;
+@@ -309,6 +341,7 @@
+     }
+ }
+ 
++#if !defined (__MINGW32__)
+ struct _tc_string {
+      const char *tc_var;
+      char **tc_value;
+@@ -370,11 +403,37 @@
+ #endif
+   tcap_initialized = 1;
+ }
++#endif /* !__MINGW32__ */
+ 
+ int
+ _rl_init_terminal_io (terminal_name)
+      const char *terminal_name;
+ {
++#if defined (__MINGW32__)
++  _rl_term_cr = "\r";						/* any value != 0  */
++  _rl_term_im = _rl_term_ei = _rl_term_ic = _rl_term_IC = (char *)NULL;	/* !! we emulate insertion  */
++  _rl_term_up = "y";						/* any value != 0  */
++  _rl_term_dc = _rl_term_DC =  (char *)NULL;			/* !! we emulate deletion  */
++  _rl_visible_bell = (char *)NULL;
++ 
++  _rl_get_screen_size (0, 1);
++   
++  /* Let Windows handle meta keys!  */
++  term_has_meta = 0;
++  _rl_term_mm = _rl_term_mo = (char *)NULL;
++ 
++  /* It probably has arrow keys, but I don't know what they are. */
++  _rl_term_ku = _rl_term_kd = _rl_term_kr = _rl_term_kl = (char *)NULL;
++  
++#if defined (HACK_TERMCAP_MOTION)
++  _rl_term_forward_char = (char *)NULL;
++#endif /* HACK_TERMCAP_MOTION */
++ 
++  _rl_terminal_can_insert = 0;
++  _rl_term_autowrap = 1;
++
++#else /* !__MINGW32__ */
++
+   const char *term;
+   char *buffer;
+   int tty, tgetent_ret;
+@@ -510,9 +569,12 @@
+   bind_termcap_arrow_keys (vi_insertion_keymap);
+ #endif /* VI_MODE */
+ 
++#endif /* !__MINGW32__ */
++  
+   return 0;
+ }
+ 
++#if !defined (__MINGW32__)
+ /* Bind the arrow key sequences from the termcap description in MAP. */
+ static void
+ bind_termcap_arrow_keys (map)
+@@ -549,6 +611,7 @@
+     }
+   return ((char *)NULL);
+ }
++#endif /* !__MINGW32__ */
+ 
+ /* Re-initialize the terminal considering that the TERM/TERMCAP variable
+    has changed. */
+@@ -560,6 +623,7 @@
+   return 0;
+ }
+ 
++#if !defined (__MINGW32__)
+ /* A function for the use of tputs () */
+ #ifdef _MINIX
+ void
+@@ -649,6 +713,80 @@
+   return (-1);
+ }
+ 
++#else	/* __MINGW32__ */
++
++/* Write COUNT characters from STRING to the output stream. */
++void
++_rl_output_some_chars (string, count)
++     const char *string;
++     int count;
++{
++  CONSOLE_SCREEN_BUFFER_INFO	csbi;
++  fwrite (string, 1, count, _rl_out_stream);
++  if ( (haveConsole & FOR_OUTPUT) && GetConsoleScreenBufferInfo(hStdout, &csbi) )
++    {
++      int linear_pos = (int)csbi.dwCursorPosition.Y * (int)csbi.dwSize.X
++			+ (int)csbi.dwCursorPosition.X;
++      if (linear_pos > rlScreenMax)
++        {
++          rlScreenEnd = csbi.dwCursorPosition;
++          rlScreenMax = linear_pos;
++        }
++    }
++}
++
++/* This is used to collect all putc output */
++int
++_rl_output_character_function (c)
++     int c;
++{
++  _rl_output_some_chars ((char *)&c, 1);
++  return 1;
++}
++
++/* Move the cursor back. */
++int
++_rl_backspace (count)
++     int count;
++{
++  CONSOLE_SCREEN_BUFFER_INFO	csbi;
++
++  if ( (haveConsole & FOR_OUTPUT) && GetConsoleScreenBufferInfo(hStdout, &csbi) )
++    {
++      while (count > csbi.dwCursorPosition.X)
++        {
++          --csbi.dwCursorPosition.Y;
++          count -= csbi.dwCursorPosition.X + 1;
++          csbi.dwCursorPosition.X = csbi.dwSize.X - 1;
++        }
++      csbi.dwCursorPosition.X -= count;
++      SetConsoleCursorPosition(hStdout, csbi.dwCursorPosition);
++    }
++  return 0;
++}
++
++/* Move to the start of the next line. */
++int
++rl_crlf ()
++{
++  _rl_output_some_chars ("\n", 1);
++  return 0;
++}
++
++/* Ring the terminal bell. */
++int
++rl_ding ()
++{
++  if (readline_echoing_p)
++    {
++      if (_rl_bell_preference != NO_BELL)
++	MessageBeep(MB_OK);
++      return (0);
++    }
++  return (-1);
++}
++#endif	/* __MINGW32__ */
++
+ /* **************************************************************** */
+ /*								    */
+ /*	 	Controlling the Meta Key and Keypad		    */
+@@ -658,7 +796,7 @@
+ void
+ _rl_enable_meta_key ()
+ {
+-#if !defined (__DJGPP__)
++#if !defined (__DJGPP__) && !defined (__MINGW32__)
+   if (term_has_meta && _rl_term_mm)
+     tputs (_rl_term_mm, 1, _rl_output_character_function);
+ #endif
+@@ -668,7 +806,7 @@
+ _rl_control_keypad (on)
+      int on;
+ {
+-#if !defined (__DJGPP__)
++#if !defined (__DJGPP__) && !defined (__MINGW32__)
+   if (on && _rl_term_ks)
+     tputs (_rl_term_ks, 1, _rl_output_character_function);
+   else if (!on && _rl_term_ke)
+@@ -690,7 +828,7 @@
+ _rl_set_cursor (im, force)
+      int im, force;
+ {
+-#ifndef __MSDOS__
++#if !defined (__MSDOS__) && !defined (__MINGW32__)
+   if (_rl_term_ve && _rl_term_vs)
+     {
+       if (force || im != rl_insert_mode)
+diff -Nru3 --exclude configure gdb-6.3/readline/tilde.c gdb-6.3-1/readline/tilde.c
+--- gdb-6.3/readline/tilde.c	Mon Dec  9 09:31:37 2002
++++ gdb-6.3-1/readline/tilde.c	Wed Feb 16 20:17:48 2005
+@@ -43,7 +43,11 @@
+ #endif /* HAVE_STDLIB_H */
+ 
+ #include <sys/types.h>
++#ifndef __MINGW32__
+ #include <pwd.h>
++#else
++#include <windows.h>
++#endif
+ 
+ #include "tilde.h"
+ 
+@@ -306,7 +310,12 @@
+ {
+   char *dirname, *expansion, *username;
+   int user_len;
++#if !defined (__MINGW32__)
+   struct passwd *user_entry;
++#else /* __MINGW32__ */
++  char UserName[256];
++  unsigned long UserLen = 256;
++#endif /* __MINGW32__ */
+ 
+   if (filename == 0)
+     return ((char *)NULL);
+@@ -347,6 +356,7 @@
+   /* No preexpansion hook, or the preexpansion hook failed.  Look in the
+      password database. */
+   dirname = (char *)NULL;
++#if !defined (__MINGW32__)
+   user_entry = getpwnam (username);
+   if (user_entry == 0)
+     {
+@@ -374,6 +384,16 @@
+     }
+ 
+   endpwent ();
++#else /* __MINGW32__ */
++  if (GetUserName (UserName, &UserLen))
++    {
++      if (!stricmp (username, UserName))
++	dirname = glue_prefix_and_suffix (sh_get_home_dir (), filename, user_len);
++      else if (dirname == 0)
++	dirname = savestring (filename);
++    }
++  free (username);
++#endif /* __MINGW32__ */
+   return (dirname);
+ }
+ 
